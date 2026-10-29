@@ -1,0 +1,34 @@
+[Unit]
+Description=cdx agent daemon
+Documentation=https://github.com/yourok/cdx
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cdx daemon start --foreground
+Restart=on-failure
+RestartSec=3
+
+# Демон работает от имени пользователя: сокет и база лежат в его домашнем каталоге.
+User=%i
+Environment=HOME=/home/%i
+
+# Логи пишет сам cdx в ~/.local/share/cdx/logs, поэтому stderr нужен только
+# для сообщений до инициализации журнала.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cdx
+
+# Процессу не нужны повышенные права.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%i/.local/share/cdx /home/%i/.config/cdx
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,348 @@
+/* Style tokens and shared block classes. */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces: canvas, raised layer, card, hover. */
+  --bg: #0f151b;
+  --raised: #151d25;
+  --surface: #1a232c;
+  --hover: #212c37;
+
+  /* Borders. */
+  --border: #263340;
+  --border-strong: #33455a;
+
+  /* Text. */
+  --text: #e6edf3;
+  --muted: #97a5b1;
+  --faint: #7b8a97;
+
+  /* Semantic colors. */
+  --accent: #38bdf8;
+  --accent-deep: #1588ba;
+  --accent-text: #7dd3fc;
+  --accent-soft: rgba(72, 192, 243, 0.14);
+  --accent-soft-hover: rgba(72, 192, 243, 0.22);
+  --accent-line: rgba(72, 192, 243, 0.45);
+  --success: #2dd4bf;
+  --warning: #f0a832;
+  --danger: #f0645c;
+
+  /* Sizes. */
+  --radius: 6px;
+  --radius-card: 8px;
+  --radius-modal: 10px;
+  --control-h: 36px;
+  /* Smallest action button width, so buttons on a page match in size. */
+  --action-btn-min: 180px;
+  /* Sidebar width. */
+  --sidebar-w: 224px;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* The site header sticks to the top while scrolling. */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--raised);
+  border-bottom: 1px solid var(--border);
+}
+
+/* The brand links home but looks like a heading. */
+.brand,
+.brand:hover h4 {
+  color: inherit;
+  text-decoration: none;
+}
+
+.brand h4 {
+  color: var(--accent-text);
+  transition: color 120ms ease;
+}
+
+.brand:hover h4 {
+  color: var(--accent);
+}
+
+/* Page spacing. The width comes from Container's size prop, so max-width
+   is not set here: it would override the container size. */
+.page {
+  width: 100%;
+  padding-top: 24px;
+  padding-bottom: 64px;
+}
+
+/* Page hero: accent bar on the left over a soft background. */
+.hero {
+  background:
+    linear-gradient(135deg, var(--accent-soft) 0%, transparent 60%),
+    var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-card);
+  padding: 28px;
+  margin-bottom: 24px;
+}
+
+.hero h1 {
+  font-size: 26px;
+}
+
+/* The UI side menu. */
+.sidebar {
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
+  border-right: 1px solid var(--border);
+  background: var(--raised);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Menu entry: same height, radius and look in every section.
+   The active entry gets a soft accent background instead of a fill. */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.nav-item:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.nav-item svg {
+  flex: none;
+  color: currentColor;
+}
+
+/* Separator between menu groups. */
+.nav-gap {
+  height: 1px;
+  margin: 8px 10px;
+  background: var(--border);
+}
+
+/* Menu group caption: a state, not an action. */
+.nav-caption {
+  padding: 12px 10px 4px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Hint icon: circled icon, hover and keyboard focus. */
+.hint-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  cursor: help;
+  transition: color 120ms ease;
+  outline: none;
+}
+
+.hint-icon:hover,
+.hint-icon:focus-visible {
+  color: var(--text);
+}
+
+/* Technical values: addresses, keys, identifiers. */
+.mono {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Stat tile: caption on top, value below. */
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 16px;
+}
+
+.stat-card .label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.stat-card .value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 2px;
+}
+
+/* Notice: accent bar on the left. */
+.notice {
+  background: var(--surface);
+  border-left: 3px solid var(--accent);
+}
+
+/* Warning notice: warning bar on the left. */
+.notice.warn {
+  border-left-color: var(--warning);
+}
+
+/* Failure notice: danger bar on the left. */
+.notice.danger {
+  border-left-color: var(--danger);
+}
+
+/* Provider card: header with name and actions, models below. */
+.provider-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: 16px;
+}
+
+/* Model row inside a provider: a raised strip. */
+.model-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--raised);
+  padding: 10px 12px;
+}
+
+.model-row:hover {
+  border-color: var(--border-strong);
+}
+
+/* Scrollable code area: log, history. */
+.code-block {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+/* A button is as wide as its text instead of filling the row.
+   Stretching is opt-in through fullWidth. */
+.mantine-Button-root:not([data-block]) {
+  width: fit-content;
+}
+
+/* Action buttons in cards share one minimum width so they match.
+   Small (xs) buttons in rows, lists and tables are excluded. */
+.mantine-Card-root .mantine-Button-root[data-size='sm']:not([data-block]) {
+  min-width: var(--action-btn-min);
+}
+
+/* Buttons in one row share it and stretch on their own: a minimum width
+   only gets in the way and forces them to wrap. */
+.mantine-Card-root .mantine-Group-root > .mantine-Button-root[data-size='sm'] {
+  min-width: 0;
+}
+
+/* On a narrow screen the minimum is smaller: single buttons still match
+   and a pair of buttons fits on one row. */
+@media (max-width: 500px) {
+  :root {
+    --action-btn-min: 160px;
+  }
+}
+
+/* Footer: a service line pinned to the bottom of the window. */
+.site-footer {
+  margin-top: auto;
+  padding: 24px 0;
+  border-top: 1px solid var(--border);
+}
+
+/* On a narrow screen the menu moves to the top as a horizontal strip:
+   a vertical column would leave the content too little width. */
+@media (max-width: 720px) {
+  .sidebar {
+    width: 100%;
+    min-width: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+
+  .sidebar nav {
+    flex-direction: row !important;
+  }
+
+  .nav-item {
+    white-space: nowrap;
+  }
+
+  .nav-gap {
+    width: 1px;
+    height: auto;
+    margin: 6px 4px;
+  }
+}
+
+/* Scrollbar in the surface tones. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-deep);
+}
+
+/* App shell: menu on the left, content on the right. */
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* On a narrow screen the menu becomes a top strip. */
+@media (max-width: 720px) {
+  .app-shell {
+    flex-direction: column;
+  }
+}
