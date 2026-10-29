@@ -11,11 +11,10 @@ they do nothing.
 CDX_LIVE_API_KEY=<key> go test -tags live -v ./test/live/
 ```
 
-Three models of the `inference.dahl.global` provider are covered: MiniMax,
-DeepSeek and GLM. For each one the tests check an answer, a tool call, the
-refusal of an unknown tool and token usage. Separately they check the write
-refusal without permission, context compaction and the token estimate against
-the real count.
+Three models are covered: MiniMax, DeepSeek and GLM. For each one the tests
+check an answer, a tool call, the refusal of an unknown tool and token usage.
+Separately they check the write refusal without permission, context compaction
+and the token estimate against the real count.
 
 ## Build
 
@@ -158,9 +157,9 @@ connection: address, protocol and API key. Models are then added inside the
 provider: they differ only by their identifier at the provider, the context
 window and the output limit.
 
-An example for the Dahl provider: the address
-`https://inference.dahl.global/v1`, the key from `DAHL_KEY`, the protocol
-`openai-chat`. Its models:
+An example provider: the address `https://gateway.example.com/v1`, the key
+from the `PROVIDER_KEY` environment variable, the protocol `openai-chat`. Its
+models:
 
 | Name | Identifier at the provider | Context |
 |---|---|---|
@@ -186,8 +185,8 @@ Models already configured are marked as added and are not added twice.
 
 The context window and the output limit come from the model only: the program
 has no global values. When the list is fetched they are filled from the
-provider answer; many gateways (Dahl among them) return only the identifier,
-so the fields stay empty.
+provider answer; many gateways return only the identifier, so the fields stay
+empty.
 
 An empty field means "not set":
 
@@ -339,6 +338,16 @@ cdx --plugin list
 Plugins live in `~/.local/share/cdx/plugins`. Each runs in its own goja VM and
 reaches the core through `cdx.*` bindings, only when the capability is declared
 in `capabilities`.
+
+The core holds no tools of its own, so for the basic actions - reading and
+writing files, running commands - the ready-made
+[cdx-local-tools](https://github.com/YouROK/cdx-local-tools) plugin can be used:
+
+```bash
+cdx --plugin add https://raw.githubusercontent.com/YouROK/cdx-local-tools/v1.0.1/manifest.json
+```
+
+The same address can be pasted into the Plugins section of the web interface.
 
 ## MCP
 
