@@ -1,0 +1,8 @@
+{
+  "id": "permissions",
+  "name": "Permissions",
+  "version": "1.0.0",
+  "description": "Intercepts tool calls, evaluates permission rules, and prompts the user when confirmation is required",
+  "entry": "main.js",
+  "order": 10
+}

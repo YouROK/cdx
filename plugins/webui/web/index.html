@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cdx</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/ui/webui/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <svg width="22" height="22" viewBox="0 0 64 64" role="img" aria-label="cdx" style="flex:none">
+          <rect width="64" height="64" rx="14" fill="var(--raised)"/>
+          <path d="M14 24a4 4 0 0 1 4-4h9l4 5h15a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4Z"
+                fill="none" stroke="var(--accent)" stroke-width="4.5" stroke-linejoin="round"/>
+          <path d="M28 30.5 L35 37 L28 43.5" fill="none" stroke="var(--text)" stroke-width="4.5"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <h4>cdx</h4>
+      </div>
+      <nav id="nav-list"></nav>
+    </aside>
+    <main class="main-wrap">
+      <div id="page-content" class="page"></div>
+    </main>
+  </div>
+  <div id="toast-container" class="toast-container"></div>
+  <div id="cdx-modal-root"></div>
+  <script src="/ui/webui/app.js"></script>
+</body>
+</html>

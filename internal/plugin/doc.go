@@ -1,0 +1,87 @@
+package plugin
+
+import (
+	"fmt"
+	"reflect"
+	"strings"
+)
+
+// DocEntry describes a single plugin API signature or file requirement.
+type DocEntry struct {
+	Signature string `json:"signature"`
+	Summary   string `json:"summary"`
+}
+
+// DocFileNames lists the files a cdx plugin consists of.
+var DocFileNames = []DocEntry{
+	{Signature: "manifest.json", Summary: "Declares the plugin identity and entry script"},
+	{Signature: "<entry>.js", Summary: "JavaScript entry loaded into an isolated Goja VM; defines function setup(cdx) { ... }"},
+}
+
+// DocCDXObject lists the APIs available on the cdx object inside a plugin VM.
+var DocCDXObject = []DocEntry{
+	{Signature: "cdx.id / cdx.dir / cdx.worker / cdx.workdir()", Summary: "Plugin ID, absolute directory path, worker-copy flag, and the active session working directory"},
+	{Signature: "cdx.inWorker(fn)", Summary: "Mark a provider complete handler or tool handler for execution in an isolated worker VM"},
+	{Signature: "cdx.apiDoc()", Summary: "Returns the live Markdown Plugin API Reference generated from the running binary"},
+	{Signature: "cdx.log.debug|info|warn|error(msg)", Summary: "Write leveled log messages tagged with [Plugin:<id>]"},
+	{Signature: "cdx.storage.get|set|delete|keys|list()", Summary: "Isolated per-plugin plain JSON key-value store in BoltDB"},
+	{Signature: "cdx.secrets.get|set|delete|has|keys|masked()", Summary: "Isolated per-plugin AES-256-GCM encrypted store in BoltDB for API keys and secrets"},
+	{Signature: "cdx.settings.register(schema) / save(values)", Summary: "Register a JSON Schema for declarative settings; format: 'secret' fields are routed to cdx.secrets"},
+	{Signature: "cdx.tools.register(spec, handler) / list()", Summary: "Register an LLM tool ({ name, description, permission, input_schema }, function(args) {}); wrap handler with cdx.inWorker to use a worker VM"},
+	{Signature: "cdx.providers.register({ listModels, complete }) / listModels()", Summary: "Register as an LLM provider; listModels returns available models, complete(req, emit) runs turns; wrap complete with cdx.inWorker to use a worker VM"},
+	{Signature: "cdx.hooks.on(hookName, priority, handler) / run(hookName, payload)", Summary: "Intercept lifecycle pipelines: session:before_turn, tool:before_call, tool:after_call"},
+	{Signature: "cdx.bus.publish|subscribe|handle|request(topic, payload)", Summary: "Communicate across plugins and core via events and 1-to-1 RPC (e.g. client:prompt_user)"},
+	{Signature: "cdx.http.handle|get|post|put|delete|patch|use|group|static()", Summary: "Register HTTP endpoints, Gin middleware (ctx.next, ctx.abortWithJSON, ctx.set/get), and static assets"},
+	{Signature: "cdx.ui.register({ title, description, order, entry, schema }) / list()", Summary: "Register a section in the web dashboard using either a custom UI script entry or a JSON Schema"},
+	{Signature: "cdx.plugins.list|installZip|setEnabled|remove()", Summary: "Inspect, install from .zip URL, enable/disable, or remove plugins"},
+	{Signature: "cdx.sys.readFile|writeFile|stat|readDir|exec|fetch()", Summary: "Low-level OS capabilities: filesystem I/O, shell execution, and HTTP/SSE streaming fetch"},
+}
+
+// DocPermissionLevels lists the tool permission levels.
+var DocPermissionLevels = []DocEntry{
+	{Signature: "read", Summary: "Read-only inspection without side effects; allowed by default"},
+	{Signature: "edit", Summary: "Creates or modifies files; asks the user unless policy allows"},
+	{Signature: "dangerous", Summary: "Executes shell commands or destructive operations; asks the user"},
+}
+
+// RenderAPIDoc generates the markdown Plugin API Reference directly from the Go Manifest struct reflection and host definitions.
+func RenderAPIDoc() string {
+	var sb strings.Builder
+	sb.WriteString("## Plugin API reference\n\n")
+	sb.WriteString("Generated dynamically from the cdx Go core structures and host runtime; matches the running binary.\n\n")
+
+	sb.WriteString("### Plugin files\n")
+	writeDocEntries(&sb, DocFileNames)
+
+	sb.WriteString("\n### `manifest.json` fields (reflected from Go `plugin.Manifest`)\n")
+	t := reflect.TypeOf(Manifest{})
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := f.Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		parts := strings.Split(tag, ",")
+		name := parts[0]
+		optional := len(parts) > 1 && parts[1] == "omitempty"
+		reqLabel := "required"
+		if optional || name == "order" {
+			reqLabel = "optional"
+		}
+		fmt.Fprintf(&sb, "- `%s` (`%s`, %s)\n", name, f.Type.Name(), reqLabel)
+	}
+
+	sb.WriteString("\n### The `cdx` host object\n")
+	writeDocEntries(&sb, DocCDXObject)
+
+	sb.WriteString("\n### Tool permission levels\n")
+	writeDocEntries(&sb, DocPermissionLevels)
+
+	return strings.TrimRight(sb.String(), "\n") + "\n"
+}
+
+func writeDocEntries(sb *strings.Builder, entries []DocEntry) {
+	for _, e := range entries {
+		fmt.Fprintf(sb, "- `%s` - %s\n", e.Signature, e.Summary)
+	}
+}

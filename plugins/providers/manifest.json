@@ -1,0 +1,9 @@
+{
+  "id": "providers",
+  "name": "Providers & Models",
+  "version": "1.0.0",
+  "description": "Manages LLM provider connections (OpenAI-compatible and Anthropic), encrypted API keys, model discovery, and streaming completions",
+  "entry": "main.js",
+  "order": 5,
+  "workers": 2
+}

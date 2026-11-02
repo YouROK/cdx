@@ -1,0 +1,8 @@
+{
+  "id": "presets",
+  "name": "Agent presets",
+  "version": "1.0.0",
+  "description": "Manages built-in and custom agent working modes (standard, mini, creator with live Plugin API reference)",
+  "entry": "main.js",
+  "order": 8
+}
