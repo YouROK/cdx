@@ -221,6 +221,40 @@ func (d *Daemon) registerCoreRoutes() {
 		c.JSON(http.StatusOK, gin.H{"plugins": d.plugins.ListDetailed()})
 	})
 
+	d.router.Handle("core", "GET", "/api/core/plugins/:id/settings", func(c *gin.Context) {
+		rawSchema, values, secrets, ok := d.plugins.SettingsSnapshot(c.Param("id"))
+		if !ok {
+			c.JSON(http.StatusNotFound, gin.H{"error": "plugin has no declarative settings"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"schema":  rawSchema,
+			"values":  values,
+			"secrets": secrets,
+		})
+	})
+
+	d.router.Handle("core", "POST", "/api/core/plugins/:id/settings", func(c *gin.Context) {
+		var values map[string]any
+		if err := c.ShouldBindJSON(&values); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if _, err := d.plugins.SaveSettings(c.Param("id"), values); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		_, current, secrets, ok := d.plugins.SettingsSnapshot(c.Param("id"))
+		if !ok {
+			c.JSON(http.StatusNotFound, gin.H{"error": "plugin has no declarative settings"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"values":  current,
+			"secrets": secrets,
+		})
+	})
+
 	d.router.Handle("core", "POST", "/api/core/plugins/install", func(c *gin.Context) {
 		var body struct {
 			URL string `json:"url"`

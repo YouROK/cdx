@@ -122,4 +122,31 @@ function setup(cdx) {
     cdx.storage.set("config", cfg);
     ctx.json(200, cfg);
   });
+
+  cdx.ui.register({
+    title: "Context & Memory",
+    description: "Controls AGENTS.md loading and conversation history compaction",
+    order: 15,
+    config_url: "/api/plugins/context/config",
+    schema: {
+      type: "object",
+      title: "Context settings",
+      properties: {
+        load_agents_md: {
+          type: "boolean",
+          title: "Load AGENTS.md",
+          description: "Read AGENTS.md or CLAUDE.md from the working directory before each turn.",
+          default: true
+        },
+        max_messages: {
+          type: "integer",
+          title: "Recent messages limit",
+          description: "Messages kept before older history is compacted into a summary.",
+          minimum: 4,
+          maximum: 500,
+          default: 40
+        }
+      }
+    }
+  });
 }

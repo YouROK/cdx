@@ -23,7 +23,7 @@ export GOSUMDB := off
 
 .DEFAULT_GOAL := all
 
-.PHONY: all build bin run test test-live vet fmt clean install uninstall guard-root
+.PHONY: all build bin web run test test-live vet fmt clean install uninstall guard-root
 
 all: clean build
 
@@ -37,7 +37,11 @@ guard-root:
 
 build: bin
 
-bin: guard-root
+web:
+	@if [ ! -d node_modules ]; then npm ci; fi
+	npm run build
+
+bin: guard-root web
 	@mkdir -p $(dir $(BIN))
 	go build -o $(BIN) ./cmd/cdx
 
@@ -59,11 +63,15 @@ fmt:
 	gofmt -w cmd internal test
 
 clean:
-	rm -rf bin dist
+	rm -rf bin dist plugins/webui/web/dist plugins/providers/web/dist plugins/presets/web/dist
 
 install:
 	@test -x "$(BIN)" || { \
 		echo "$(BIN) is missing: run 'make' first, without sudo"; \
+		exit 1; \
+	}
+	@test -f plugins/webui/web/dist/index.html || { \
+		echo "web assets are missing: run 'make' first, without sudo"; \
 		exit 1; \
 	}
 	@if [ "$$(id -u)" != "0" ] && [ -z "$(SUDO)" ] && [ -z "$(SUDO_EXPLICIT)" ]; then \

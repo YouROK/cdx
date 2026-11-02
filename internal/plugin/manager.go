@@ -276,6 +276,28 @@ func (m *Manager) UnloadPlugin(id string) bool {
 	return ok
 }
 
+// SettingsSnapshot returns the registered settings schema and current values for a plugin.
+func (m *Manager) SettingsSnapshot(id string) (map[string]any, map[string]any, map[string]bool, bool) {
+	m.mu.RLock()
+	rt := m.plugins[id]
+	m.mu.RUnlock()
+	if rt == nil {
+		return nil, nil, nil, false
+	}
+	return rt.SettingsSnapshot()
+}
+
+// SaveSettings validates and persists declarative settings for a plugin.
+func (m *Manager) SaveSettings(id string, values map[string]any) (map[string]any, error) {
+	m.mu.RLock()
+	rt := m.plugins[id]
+	m.mu.RUnlock()
+	if rt == nil {
+		return nil, fmt.Errorf("plugin %q is not running", id)
+	}
+	return rt.SaveSettings(values)
+}
+
 // GetPluginInfo returns detailed status for a single plugin.
 func (m *Manager) GetPluginInfo(id string) (PluginInfo, bool) {
 	all := m.ListDetailed()

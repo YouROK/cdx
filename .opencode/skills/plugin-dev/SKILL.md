@@ -22,7 +22,7 @@ Before writing plugin code, always check:
    - Keep compatibility with Goja (ES5.1 / ES6 subset supported by Goja).
    - Store non-sensitive configuration in `cdx.storage` and API keys/tokens in `cdx.secrets` (encrypted with AES-256-GCM in `cdx.db`).
 3. **Web UI**:
-   - For simple settings, pass a JSON Schema to `cdx.ui.register({ title, description, order, schema })` and expose `GET/POST /api/plugins/<id>/config`.
-   - For rich interactive views, mount static files via `cdx.http.static("/ui/<id>", "./web")`, pass `entry: "/ui/<id>/panel.js"` to `cdx.ui.register(...)`, and assign `window.CDXPluginPanels["<id>"] = function(container) { ... }`.
+   - For simple settings, pass a JSON Schema to `cdx.ui.register({ title, description, order, schema })`; the shell renders the form and uses `GET/POST /api/core/plugins/<id>/settings` unless `config_url` names a plugin-owned endpoint.
+   - For rich interactive views, mount built files via `cdx.http.static("/ui/<id>", "./web")`, pass `entry: "/ui/<id>/dist/panel.js"` and `ui_api: 1` to `cdx.ui.register(...)`, and export `mount(container, api)` from the ESM module. React panels must externalize `react`, `react/jsx-runtime`, `react-dom`, and `react-dom/client`; the shell serves the shared runtime through an import map.
 4. **Verification**:
-   - Run `make test && make vet` to ensure the plugin loads cleanly and passes all unit/daemon checks.
+   - Run `make build && make test && make vet` to build the Web UI, load the plugin, and pass all unit/daemon checks.

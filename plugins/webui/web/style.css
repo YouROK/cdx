@@ -763,3 +763,61 @@ textarea:focus {
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   }
 }
+
+.plugin-host,
+.plugin-root {
+  display: block;
+  min-width: 0;
+}
+
+.schema-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.error-panel {
+  border-color: var(--danger);
+}
+
+.error-text {
+  color: var(--danger);
+}
+
+.link-button {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--accent-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.panel-flush {
+  padding: 0;
+}
+
+.panel-pad {
+  padding: 20px;
+}
+
+.panel-divider {
+  border-bottom: 1px solid var(--border);
+}
+
+.log-block {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.confirm-box {
+  max-width: 440px;
+}

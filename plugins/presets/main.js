@@ -259,7 +259,8 @@ function setup(cdx) {
     description: "Built-in and custom agent working modes and system prompts",
     icon: "presets",
     order: 7,
-    entry: "/ui/presets/panel.js"
+    entry: "/ui/presets/dist/panel.js",
+    ui_api: 1
   });
 
   cdx.http.static("/ui/presets", "./web");

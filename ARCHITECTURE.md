@@ -86,12 +86,13 @@ The bus connects the core and all plugins without coupling them together. It sup
   * **Route groups & parameters**: `cdx.http.group(prefix, ...middleware)` and routes (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`) with `:param` and `*wildcard` matching.
   * **Context helpers & SSE**: JSON binding/rendering, headers, cookies, query params, status codes, and Server-Sent Events (`ctx.stream`) for live updates.
   * **Static asset directories**: `cdx.http.static(prefix, dir)` - serves frontend scripts, HTML, CSS, or icons from the plugin's folder.
-  * **UI registration**: `cdx.ui.register({ title, icon, schema, entry })` - registers the plugin's panel in the web dashboard (either declarative via JSON Schema or a custom UI script/view provided by the plugin).
+  * **UI registration**: `cdx.ui.register({ title, icon, order, schema, entry, ui_api, config_url, styles })` - registers a declarative JSON Schema panel or a custom ESM page panel. Page panels are mounted into a shadow-root container and versioned with `ui_api`. Schema panels use the generic plugin settings endpoint unless `config_url` points at a plugin-owned endpoint.
 * All routes and middleware registered by a plugin can be dynamically reassigned or torn down cleanly if a plugin is reloaded or stopped.
 
 ### 3.5. JSON Schema Engine (`internal/schema`)
 * Validates tool inputs and declarative plugin settings against standard JSON Schema (`type: "object"`).
 * Supports `format: "secret"` so declarative forms can automatically mask secret fields and store them in `cdx.secrets`.
+* Exposes declarative settings through `GET/POST /api/core/plugins/:id/settings`, backed by the plugin's isolated plain and encrypted storage. Plugins that already own a config endpoint can set `config_url` instead.
 
 ### 3.6. Plugin Host (`internal/plugin`)
 * Discovers plugins from configured directories (`/usr/local/share/cdx/plugins`, `~/.local/share/cdx/plugins`).
@@ -138,17 +139,17 @@ The bus connects the core and all plugins without coupling them together. It sup
 
 Default plugins live in `plugins/` and are installed into the plugin directory via `make install`:
 
-1. **`plugins/webui`**: Registers `/` on the core HTTP router to serve the main web application shell. Queries the core for registered plugin UI panels (both JSON Schema forms and custom plugin UI views) and renders the navigation and workspace.
+1. **`plugins/webui`**: Registers `/` on the core HTTP router to serve the React web application shell. Queries the core for registered plugin UI panels, renders JSON Schema forms itself, and mounts custom page panels as isolated shadow-root modules. The shell serves the shared React runtime through an import map so compiled plugin panels use one React instance.
 2. **`plugins/providers`**:
    * Owns provider connections, model lists, parameters (`temperature`, `context_window`, `max_tokens`, `reasoning`), and model discovery.
    * Saves configurations in its `cdx.storage` and API keys in its `cdx.secrets`.
-   * Exposes its own management UI panel and HTTP endpoints on the core router.
+   * Exposes its own React page panel and HTTP endpoints on the core router.
    * Registers available models with the core via `cdx.providers`.
 3. **`plugins/presets`**:
    * Manages built-in (`standard`, `mini`, `creator`) and custom agent presets.
    * Replaces `{{workspace}}` and `{{max_iterations}}` in preset prompts from the active session and step budget.
    * Dynamically embeds the live Plugin API Reference (`cdx.apiDoc()`, generated from `internal/plugin/doc.go`) into the `creator` preset.
-   * Sets the base system prompt in `session:before_turn` (priority `5`) and exposes the `Agent presets` page in the Web UI.
-4. **`plugins/permissions`**: Intercepts `tool:before_call`, checks stored rules (`allow`, `ask`, `deny`) in its storage, supports `once`, `session`, `daemon`, `always`, and `deny` choices, and exposes its rule management in the Web UI.
-5. **`plugins/context`**: Appends `AGENTS.md`, conversation summary, and the `Environment` / `Tools` block in `session:before_turn` (priority `10`), and compacts history when approaching message limits.
+   * Sets the base system prompt in `session:before_turn` (priority `5`) and exposes the `Agent presets` page in the Web UI as a React page panel.
+4. **`plugins/permissions`**: Intercepts `tool:before_call`, checks stored rules (`allow`, `ask`, `deny`) in its storage, supports `once`, `session`, `daemon`, `always`, and `deny` choices, and exposes its rule management as a declarative schema panel.
+5. **`plugins/context`**: Appends `AGENTS.md`, conversation summary, and the `Environment` / `Tools` block in `session:before_turn` (priority `10`), compacts history when approaching message limits, and exposes its settings as a declarative schema panel.
 6. **`plugins/tools-local`**: Provides filesystem and shell tools (`read_file`, `write_file`, `edit_file`, `list_dir`, `shell`) to the model.

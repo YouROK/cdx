@@ -12,8 +12,9 @@ Every plugin lives in its own directory (either inside `plugins/<id>` in the rep
 <plugin-id>/
   manifest.json      # Required: plugin identity and entry script
   main.js            # Required: Goja JS entry script defining setup(cdx)
-  web/               # Optional: static frontend assets and custom UI panel
-    panel.js         # Optional: custom Web UI panel script
+  web/               # Optional: frontend source and built page panels
+    src/panel.jsx    # Optional: page panel source (React or plain JS)
+    dist/panel.js    # Built ESM page module served by the Web UI
 ```
 
 ---
@@ -137,31 +138,100 @@ Isolated per-plugin **AES-256-GCM** encrypted bucket (`plugin_secrets:<id>`) in 
 * `cdx.http.static(urlPrefix, relativeDir)` -> mounts static files from the plugin directory.
 
 ### 4.10. Web UI Integration (`cdx.ui`)
-* **Declarative JSON Schema settings**:
-  ```js
-  cdx.ui.register({
-    title: "My Plugin",
-    description: "Settings for My Plugin",
-    order: 50,
-    schema: {
-      type: "object",
-      properties: {
-        api_key: { type: "string", title: "API Key", format: "secret" }
-      }
+
+The Web UI has three panel levels. Prefer the simplest one that fits the plugin.
+
+**1. Declarative JSON Schema settings**
+
+```js
+cdx.ui.register({
+  title: "My Plugin",
+  description: "Settings for My Plugin",
+  order: 50,
+  schema: {
+    type: "object",
+    properties: {
+      api_key: { type: "string", title: "API Key", format: "secret" },
+      enabled: { type: "boolean", title: "Enabled", default: true }
     }
-  });
-  ```
-* **Custom Web Panel (`web/panel.js`)**:
-  ```js
-  cdx.http.static("/ui/my-plugin", "./web");
-  cdx.ui.register({
-    title: "My Plugin",
-    description: "Custom interactive workspace",
-    order: 50,
-    entry: "/ui/my-plugin/panel.js"
-  });
-  ```
-  Inside `web/panel.js`, register `window.CDXPluginPanels["my-plugin"] = function(container) { ... }`.
+  }
+});
+```
+
+`cdx.settings.register(schema)` and `cdx.settings.save(values)` are the low-level equivalents when the plugin already calls them directly. The Web UI renders the form, applies defaults, validates the values, and stores non-secret fields in the plugin's plain storage and `format: "secret"` fields in its encrypted storage. The default settings endpoint is:
+
+```text
+GET  /api/core/plugins/<id>/settings
+POST /api/core/plugins/<id>/settings
+```
+
+To keep an existing plugin-owned endpoint, add `config_url`:
+
+```js
+cdx.ui.register({
+  title: "My Plugin",
+  order: 50,
+  config_url: "/api/plugins/my-plugin/config",
+  schema: { ... }
+});
+```
+
+**2. Custom page panel**
+
+A page panel is a built ESM module mounted into an isolated shadow-root container:
+
+```js
+cdx.http.static("/ui/my-plugin", "./web");
+cdx.ui.register({
+  title: "My Plugin",
+  description: "Custom interactive workspace",
+  order: 50,
+  entry: "/ui/my-plugin/dist/panel.js",
+  ui_api: 1,
+  styles: ["/ui/my-plugin/dist/panel.css"]
+});
+```
+
+The module must export `mount(container, api)` and may return a cleanup function:
+
+```js
+export function mount(container, api) {
+  return api.render(<App api={api} />);
+}
+```
+
+`api` provides:
+
+* `plugin` - the plugin's UI descriptor.
+* `toast(message, ok)` - shell toast.
+* `confirm(title, message)` - promise-based confirmation dialog.
+* `fetchJSON(url, options)` and `postJSON(url, body)` - fetch helpers.
+* `addStyles(css)` - append a style tag to the panel's shadow root.
+* `render(element)` - recommended React entry point. It creates a root inside the shadow root and wraps the tree in an error boundary.
+
+The container is a `ShadowRoot`, so panel CSS does not leak into the shell. The shell injects its base stylesheet and the descriptors from `styles` before mounting the panel. Use `api.render` for React panels so render failures stay inside the panel instead of breaking the dashboard.
+
+React page panels use the shell-provided React runtime. The import map exposes `react`, `react/jsx-runtime`, `react-dom`, and `react-dom/client`; keep those imports external when building:
+
+```js
+// vite.config.js
+export default defineConfig({
+  build: {
+    lib: { entry: "src/panel.jsx", formats: ["es"] },
+    rollupOptions: {
+      external: ["react", "react-dom", "react-dom/client", "react/jsx-runtime"]
+    }
+  }
+});
+```
+
+`ui_api` is the page-panel contract version. The current version is `1`. The Web UI refuses a panel whose `ui_api` is newer than it understands.
+
+**3. Shell slots**
+
+Not available yet. Page panels are the extension point for custom UI in the current version.
+
+The legacy `window.CDXPluginPanels` registry is not used. New page panels are ESM modules and do not need a build step if they use plain DOM or React without JSX.
 
 ### 4.11. Plugin Lifecycle Management (`cdx.plugins`)
 * `cdx.plugins.list()`

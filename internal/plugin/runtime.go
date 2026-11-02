@@ -74,9 +74,10 @@ type Runtime struct {
 	deps           RuntimeDependencies
 	plainStore     *store.PlainNamespace
 	secretStore    *store.SecretNamespace
-	logScope       *logx.Scope
-	settingsSchema *schema.Schema
-	mode           runtimeMode
+	logScope          *logx.Scope
+	settingsSchema    *schema.Schema
+	settingsSchemaRaw map[string]any
+	mode              runtimeMode
 
 	activeCtx context.Context
 	cmds      chan vmCommand
@@ -536,14 +537,88 @@ func (rt *Runtime) buildSecretsObject(vm *goja.Runtime) *goja.Object {
 	return obj
 }
 
+func (rt *Runtime) setSettingsSchema(raw map[string]any) error {
+	parsed, err := schema.Parse(raw)
+	if err != nil {
+		return err
+	}
+	rt.settingsSchema = parsed
+	rt.settingsSchemaRaw = raw
+	return nil
+}
+
+// SettingsSnapshot returns the registered settings schema, current values, and secret flags.
+func (rt *Runtime) SettingsSnapshot() (map[string]any, map[string]any, map[string]bool, bool) {
+	if rt.settingsSchema == nil || rt.settingsSchemaRaw == nil {
+		return nil, nil, nil, false
+	}
+	values := map[string]any{}
+	secrets := map[string]bool{}
+	for name, prop := range rt.settingsSchema.Properties {
+		if prop == nil {
+			continue
+		}
+		if prop.Format == schema.FormatSecret {
+			if rt.secretStore != nil {
+				has, err := rt.secretStore.Has(name)
+				if err == nil && has {
+					secrets[name] = true
+				}
+			}
+			continue
+		}
+		if rt.plainStore != nil {
+			val, found, err := rt.plainStore.GetAny(name)
+			if err == nil && found {
+				values[name] = val
+				continue
+			}
+		}
+		if prop.Default != nil {
+			values[name] = prop.Default
+		}
+	}
+	return rt.settingsSchemaRaw, values, secrets, true
+}
+
+// SaveSettings validates and persists declarative plugin settings.
+func (rt *Runtime) SaveSettings(values map[string]any) (map[string]any, error) {
+	if rt.settingsSchema == nil {
+		return nil, fmt.Errorf("settings schema is not registered")
+	}
+	validated, err := rt.settingsSchema.Validate(values)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range rt.settingsSchema.SecretFields() {
+		if str, ok := validated[name].(string); ok && str == "" {
+			delete(validated, name)
+		}
+	}
+	plain, secrets := rt.settingsSchema.SplitSecrets(validated)
+	if rt.plainStore != nil {
+		for k, v := range plain {
+			if err := rt.plainStore.Set(k, v); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if rt.secretStore != nil {
+		for k, v := range secrets {
+			if err := rt.secretStore.Set(k, v); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return plain, nil
+}
+
 func (rt *Runtime) buildSettingsObject(vm *goja.Runtime) *goja.Object {
 	obj := vm.NewObject()
 	_ = obj.Set("register", func(rawSchema map[string]any) {
-		parsed, err := schema.Parse(rawSchema)
-		if err != nil {
+		if err := rt.setSettingsSchema(rawSchema); err != nil {
 			panic(vm.NewGoError(err))
 		}
-		rt.settingsSchema = parsed
 		if rt.deps.Router != nil {
 			rt.deps.Router.RegisterUI(router.UIDescriptor{
 				PluginID:    rt.manifest.ID,
@@ -555,27 +630,9 @@ func (rt *Runtime) buildSettingsObject(vm *goja.Runtime) *goja.Object {
 		}
 	})
 	_ = obj.Set("save", func(values map[string]any) map[string]any {
-		if rt.settingsSchema == nil {
-			panic(vm.NewGoError(fmt.Errorf("settings schema is not registered")))
-		}
-		validated, err := rt.settingsSchema.Validate(values)
+		plain, err := rt.SaveSettings(values)
 		if err != nil {
 			panic(vm.NewGoError(err))
-		}
-		plain, secrets := rt.settingsSchema.SplitSecrets(validated)
-		if rt.plainStore != nil {
-			for k, v := range plain {
-				if err := rt.plainStore.Set(k, v); err != nil {
-					panic(vm.NewGoError(err))
-				}
-			}
-		}
-		if rt.secretStore != nil {
-			for k, v := range secrets {
-				if err := rt.secretStore.Set(k, v); err != nil {
-					panic(vm.NewGoError(err))
-				}
-			}
 		}
 		return plain
 	})
@@ -839,8 +896,27 @@ func (rt *Runtime) buildUIObject(vm *goja.Runtime) *goja.Object {
 		}
 		if entry, ok := spec["entry"].(string); ok {
 			desc.Entry = entry
+			desc.UIApi = 1
+		}
+		if api, ok := spec["ui_api"].(int64); ok && api > 0 {
+			desc.UIApi = int(api)
+		} else if apiF, ok := spec["ui_api"].(float64); ok && apiF > 0 {
+			desc.UIApi = int(apiF)
+		}
+		if configURL, ok := spec["config_url"].(string); ok {
+			desc.ConfigURL = configURL
+		}
+		if styles, ok := spec["styles"].([]any); ok {
+			for _, item := range styles {
+				if style, ok := item.(string); ok && style != "" {
+					desc.Styles = append(desc.Styles, style)
+				}
+			}
 		}
 		if sch, ok := spec["schema"].(map[string]any); ok {
+			if err := rt.setSettingsSchema(sch); err != nil {
+				panic(vm.NewGoError(err))
+			}
 			desc.Schema = sch
 		}
 		rt.deps.Router.RegisterUI(desc)

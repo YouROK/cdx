@@ -87,7 +87,11 @@ func TestPluginFullCapabilities(t *testing.T) {
 
 			cdx.ui.register({
 				title: "Mock Provider UI",
-				order: 5
+				order: 5,
+				entry: "/ui/mock/panel.js",
+				ui_api: 1,
+				config_url: "/api/mock/config",
+				styles: ["/ui/mock/panel.css"]
 			});
 
 			cdx.providers.register({
@@ -165,6 +169,10 @@ func TestPluginFullCapabilities(t *testing.T) {
 	if len(uis) != 1 || uis[0].Title != "Mock Provider UI" {
 		t.Fatalf("unexpected UI descriptors: %+v", uis)
 	}
+	if uis[0].Entry != "/ui/mock/panel.js" || uis[0].UIApi != 1 ||
+		uis[0].ConfigURL != "/api/mock/config" || len(uis[0].Styles) != 1 {
+		t.Fatalf("unexpected UI descriptor fields: %+v", uis[0])
+	}
 
 	// Test Provider registration & streaming completion.
 	var chunks []string
@@ -196,6 +204,82 @@ func TestPluginFullCapabilities(t *testing.T) {
 	hookOut, err := eb.RunHook(context.Background(), "tool:before_call", map[string]any{"tool": "echo_text"})
 	if err != nil || hookOut["hooked"] != true {
 		t.Fatalf("unexpected hook result: %v (err=%v)", hookOut, err)
+	}
+}
+
+func TestDeclarativePluginSettings(t *testing.T) {
+	tmp := t.TempDir()
+	st, err := store.Open(store.Options{
+		DBPath:        filepath.Join(tmp, "cdx.db"),
+		MasterKeyPath: filepath.Join(tmp, "master.key"),
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	mgr := NewManager(RuntimeDependencies{
+		Store:    st,
+		Bus:      bus.New(),
+		Router:   router.New(),
+		Registry: NewRegistry(),
+		Logger:   logx.New(),
+	})
+	defer mgr.CloseAll()
+
+	pluginsDir := filepath.Join(tmp, "plugins")
+	writePluginFiles(t, pluginsDir, "settings-plugin", `{
+		"id": "settings-plugin",
+		"name": "Settings Plugin",
+		"version": "1.0.0",
+		"description": "Tests declarative settings",
+		"entry": "main.js"
+	}`, `
+		function setup(cdx) {
+			cdx.ui.register({
+				title: "Settings Plugin",
+				schema: {
+					type: "object",
+					properties: {
+						name: { type: "string", default: "cdx" },
+						enabled: { type: "boolean", default: true },
+						token: { type: "string", format: "secret" }
+					}
+				}
+			});
+		}
+	`)
+
+	if err := mgr.LoadDirs(context.Background(), []string{pluginsDir}); err != nil {
+		t.Fatalf("LoadDirs failed: %v", err)
+	}
+
+	raw, values, secrets, ok := mgr.SettingsSnapshot("settings-plugin")
+	if !ok || raw == nil {
+		t.Fatalf("expected settings snapshot, got ok=%v schema=%v", ok, raw)
+	}
+	if values["name"] != "cdx" || values["enabled"] != true {
+		t.Fatalf("unexpected settings defaults: %+v", values)
+	}
+	if len(secrets) != 0 {
+		t.Fatalf("unexpected secrets: %+v", secrets)
+	}
+
+	stored, err := mgr.SaveSettings("settings-plugin", map[string]any{
+		"name":    "custom",
+		"enabled": false,
+		"token":   "secret-value",
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings failed: %v", err)
+	}
+	if stored["name"] != "custom" || stored["enabled"] != false {
+		t.Fatalf("unexpected stored values: %+v", stored)
+	}
+
+	_, values, secrets, _ = mgr.SettingsSnapshot("settings-plugin")
+	if values["name"] != "custom" || values["enabled"] != false || !secrets["token"] {
+		t.Fatalf("unexpected settings after save: values=%+v secrets=%+v", values, secrets)
 	}
 }
 

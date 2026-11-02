@@ -29,6 +29,9 @@ type UIDescriptor struct {
 	Icon        string         `json:"icon,omitempty"`
 	Order       int            `json:"order,omitempty"`
 	Entry       string         `json:"entry,omitempty"`
+	UIApi       int            `json:"ui_api,omitempty"`
+	ConfigURL   string         `json:"config_url,omitempty"`
+	Styles      []string       `json:"styles,omitempty"`
 	Schema      map[string]any `json:"schema,omitempty"`
 }
 

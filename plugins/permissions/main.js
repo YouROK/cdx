@@ -275,6 +275,7 @@ function setup(cdx) {
     title: "Permissions",
     description: "Control how read, edit, and dangerous tools are approved",
     order: 20,
+    config_url: "/api/plugins/permissions/config",
     schema: {
       type: "object",
       title: "Permission Policies",

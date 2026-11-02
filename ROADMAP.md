@@ -76,3 +76,12 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Implement `plugins/webui` mounting on `/` of the core HTTP router.
 - [x] Render navigation for all installed plugins, supporting both automatic JSON Schema forms and custom plugin UI panels (such as the Providers & Models panel).
 - [x] Verify full installation and packaging via `make install`.
+
+## Stage 10: React Web UI and Page Panel Contract
+- [x] Rebuild the `plugins/webui` shell as a React application with a shared React runtime exposed through an import map.
+- [x] Render declarative JSON Schema panels in the shell and expose generic plugin settings endpoints.
+- [x] Define the versioned ESM page-panel contract (`mount(container, api)`, `ui_api`).
+- [x] Mount page panels in shadow-root containers with lazy loading, base styles, and per-panel error boundaries.
+- [x] Migrate the Providers & Models and Agent presets panels to React.
+- [x] Move Permissions and Context settings to declarative schema panels.
+- [x] Add the Vite build pipeline and wire it into `make build`.

@@ -1,0 +1,17 @@
+{
+  "name": "cdx-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:webui && npm run build:providers && npm run build:presets",
+    "build:webui": "rm -rf plugins/webui/web/dist && vite build --config plugins/webui/web/vite.vendor.config.js && vite build --config plugins/webui/web/vite.config.js",
+    "build:providers": "vite build --config plugins/providers/web/vite.config.js",
+    "build:presets": "vite build --config plugins/presets/web/vite.config.js"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "6.2.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "vite": "8.3.5"
+  }
+}
