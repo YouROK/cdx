@@ -2,14 +2,12 @@ package llm
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -23,6 +21,13 @@ type OpenAIChat struct {
 	maxRetries int
 	// retryWaitBase is the initial wait before a retry.
 	retryWaitBase time.Duration
+}
+
+func init() {
+	Register(ProtocolOpenAIChat, func(cfg Config) Provider {
+		client := NewOpenAIChat(cfg.BaseURL, cfg.APIKey, cfg.Model)
+		return client
+	})
 }
 
 // NewOpenAIChat creates a client.
@@ -139,7 +144,16 @@ func (c *OpenAIChat) Chat(ctx context.Context, req Request) (*Response, error) {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
 
-	resp, err := c.do(ctx, body)
+	s := &sender{
+		client:        c.client,
+		endpoint:      c.baseURL + "/chat/completions",
+		maxRetries:    c.maxRetries,
+		retryWaitBase: c.retryWaitBase,
+	}
+	if c.apiKey != "" {
+		s.headers = map[string]string{"Authorization": "Bearer " + c.apiKey}
+	}
+	resp, err := s.post(ctx, body)
 	if err != nil {
 		return nil, err
 	}
@@ -196,104 +210,6 @@ func (c *OpenAIChat) Chat(ctx context.Context, req Request) (*Response, error) {
 		})
 	}
 	return res, nil
-}
-
-// defaultRetries is how many times a transient error is retried.
-//
-// Free gateways often answer 429 when busy: a single attempt almost always
-// hits the limit, while several in a row wait out the load.
-const defaultRetries = 10
-
-// do sends the request and retries it on transient errors.
-func (c *OpenAIChat) do(ctx context.Context, body []byte) (*http.Response, error) {
-	var lastErr error
-	wait := c.retryWaitBase
-	if wait <= 0 {
-		wait = time.Second
-	}
-
-	for attempt := 0; attempt < c.maxRetries; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(wait):
-			}
-			// Growth is capped: otherwise by the tenth attempt the wait would
-			// reach eight minutes and the turn timeout would hit first.
-			wait *= 2
-			if wait > maxRetryWait {
-				wait = maxRetryWait
-			}
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
-		if err != nil {
-			return nil, fmt.Errorf("build request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if c.apiKey != "" {
-			req.Header.Set("Authorization", "Bearer "+c.apiKey)
-		}
-
-		resp, err := c.client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("status %d: %s", resp.StatusCode, retryHint(resp))
-			// The server may state its own retry delay: it wins over the
-			// computed one, but is still capped.
-			if ra := resp.Header.Get("Retry-After"); ra != "" {
-				if sec, err := strconv.Atoi(strings.TrimSpace(ra)); err == nil && sec > 0 {
-					delay := time.Duration(sec) * time.Second
-					if delay > maxRetryWait {
-						delay = maxRetryWait
-					}
-					wait = delay
-				}
-			}
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			continue
-		}
-		return resp, nil
-	}
-	return nil, fmt.Errorf("model request failed after %d attempts: %w", c.maxRetries, lastErr)
-}
-
-// retryHint extracts the error message for a retry.
-func retryHint(resp *http.Response) string {
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
-	if err != nil {
-		return ""
-	}
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-
-	var payload struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &payload); err == nil && payload.Error.Message != "" {
-		msg := payload.Error.Message
-		if len(msg) > 200 {
-			msg = msg[:200] + "..."
-		}
-		return msg
-	}
-	return shortBody(body)
-}
-
-// shortBody clips the response body for an error message.
-func shortBody(data []byte) string {
-	s := strings.TrimSpace(string(data))
-	if len(s) > 300 {
-		return s[:300] + "..."
-	}
-	return s
 }
 
 // DiscoveredModel is a model the provider lists.
@@ -505,6 +421,3 @@ func readStream(body io.Reader, onDelta func(Delta)) (*Response, error) {
 	}
 	return res, nil
 }
-
-// maxRetryWait caps the wait between retries.
-const maxRetryWait = 10 * time.Second

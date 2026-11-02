@@ -102,6 +102,11 @@ export function putConfig(cfg: ConfigView) {
   return request<SaveResult>('PUT', '/api/config', cfg)
 }
 
+// getProtocols lists the wire formats the daemon can speak.
+export function getProtocols() {
+  return request<{ protocols: string[] }>('GET', '/api/protocols')
+}
+
 export function getProviders() {
   return request<{ providers: ProviderView[] }>('GET', '/api/providers')
 }

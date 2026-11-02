@@ -353,7 +353,17 @@ func (d *Daemon) provider(name string) (llm.Provider, string, requestSettings, i
 	}
 
 	// The key belongs to the provider: one setting for all its models.
-	p := llm.NewOpenAIChat(m.BaseURL, d.providerKey(m.Provider), m.Remote)
+	// The protocol decides the wire format, so the client comes from the
+	// factory rather than being fixed to openai-chat.
+	p, err := llm.NewProvider(llm.Config{
+		Protocol: m.Protocol,
+		BaseURL:  m.BaseURL,
+		APIKey:   d.providerKey(m.Provider),
+		Model:    m.Remote,
+	})
+	if err != nil {
+		return nil, "", requestSettings{}, 0, err
+	}
 
 	// The summarizer uses the turn model unless its own is set.
 	d.setSummarizer(p)

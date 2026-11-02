@@ -29,6 +29,7 @@ import {
   deleteModel,
   deleteProvider,
   discoverModels,
+  getProtocols,
   getProviders,
   saveModel,
   saveProvider,
@@ -44,13 +45,6 @@ import {
 import { Page, PageHeader, Panel } from '../components/layout'
 import Loading from '../components/Loading'
 import { t } from '../i18n'
-
-// Protocols the daemon supports.
-const protocols = [
-  { value: 'openai-chat', label: 'openai-chat' },
-  { value: 'openai-responses', label: 'openai-responses' },
-  { value: 'anthropic', label: 'anthropic' },
-]
 
 // emptyProvider returns a blank provider for a new entry.
 function emptyProvider(): ProviderEdit {
@@ -140,6 +134,10 @@ function notify(ok: boolean, message: string) {
 export default function ModelsPage() {
   const queryClient = useQueryClient()
   const { data, isLoading, error } = useQuery({ queryKey: ['providers'], queryFn: getProviders })
+  // The protocol list comes from the daemon: a new protocol appears in the
+  // choice without a frontend change.
+  const { data: protocolData } = useQuery({ queryKey: ['protocols'], queryFn: getProtocols })
+  const protocols = (protocolData?.protocols ?? []).map((p) => ({ value: p, label: p }))
 
   const [providerForm, setProviderForm] = useState<ProviderEdit | null>(null)
   const [modelForm, setModelForm] = useState<ModelEdit | null>(null)
@@ -294,6 +292,7 @@ export default function ModelsPage() {
       {providerForm && (
         <ProviderModal
           form={providerForm}
+          protocols={protocols}
           onChange={setProviderForm}
           onClose={() => setProviderForm(null)}
           onSubmit={() => saveProviderMutation.mutate(providerForm)}
@@ -502,12 +501,14 @@ function ProviderCard({
 /** ProviderModal edits a provider connection. */
 function ProviderModal({
   form,
+  protocols,
   onChange,
   onClose,
   onSubmit,
   saving,
 }: {
   form: ProviderEdit
+  protocols: { value: string; label: string }[]
   onChange: (form: ProviderEdit) => void
   onClose: () => void
   onSubmit: () => void

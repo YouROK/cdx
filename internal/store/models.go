@@ -124,9 +124,6 @@ type Compat struct {
 	SupportsTemperature bool `json:"supports_temperature,omitempty"`
 }
 
-// Protocols lists the supported protocols.
-var Protocols = []string{"openai-chat", "openai-responses", "anthropic"}
-
 // DefaultReasoningLevels is the usual level set for a reasoning model.
 var DefaultReasoningLevels = map[string]string{
 	"low":    "low",

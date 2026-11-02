@@ -47,6 +47,9 @@ type Deps struct {
 	// Language reports the program language to the interface.
 	Language func() string
 
+	// Protocols lists the wire formats the daemon can speak.
+	Protocols func() []string
+
 	// Providers and their models.
 	Providers      func() ([]ProviderView, error)
 	SaveProvider   func(ProviderEdit) error
@@ -132,6 +135,7 @@ func (s *Server) Handler() http.Handler {
 		api.GET("/config", s.getConfig)
 		api.PUT("/config", s.putConfig)
 		api.GET("/models", s.listModels)
+		api.GET("/protocols", s.listProtocols)
 		api.GET("/providers", s.listProviders)
 		api.POST("/providers", s.saveProvider)
 		api.PUT("/providers/:name", s.saveProvider)

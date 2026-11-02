@@ -29,7 +29,9 @@ func (d *Daemon) saveProvider(edit web.ProviderEdit) error {
 	if edit.Protocol == "" {
 		edit.Protocol = "openai-chat"
 	}
-	if !contains(store.Protocols, edit.Protocol) {
+	// The registry holds only implemented protocols, so a declared but
+	// missing protocol is refused instead of failing on the first request.
+	if !llm.Supported(edit.Protocol) {
 		return fmt.Errorf("protocol %q is not supported", edit.Protocol)
 	}
 
@@ -168,7 +170,15 @@ func (d *Daemon) testProvider(name string) (string, error) {
 	}
 
 	// The first model is probed: every model shares the provider connection.
-	client := llm.NewOpenAIChat(provider.BaseURL, d.providerKey(name), models[0].Remote)
+	client, err := llm.NewProvider(llm.Config{
+		Protocol: provider.Protocol,
+		BaseURL:  provider.BaseURL,
+		APIKey:   d.providerKey(name),
+		Model:    models[0].Remote,
+	})
+	if err != nil {
+		return "", err
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -555,16 +565,6 @@ func permFromConfig(cfg *config.Config) (*perm.Manager, error) {
 	return perm.New(cfg)
 }
 
-// contains reports whether a value is in the list.
-func contains(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
-			return true
-		}
-	}
-	return false
-}
-
 // discoverProviderModels asks a provider for its model list.
 //
 // Each entry is tagged as already configured, so the interface marks
@@ -578,12 +578,26 @@ func (d *Daemon) discoverProviderModels(name string) ([]web.DiscoveredModelView,
 		return nil, fmt.Errorf("provider %q is not configured", name)
 	}
 
-	client := llm.NewOpenAIChat(provider.BaseURL, d.providerKey(name), "")
+	client, err := llm.NewProvider(llm.Config{
+		Protocol: provider.Protocol,
+		BaseURL:  provider.BaseURL,
+		APIKey:   d.providerKey(name),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// A protocol may have no model list endpoint: then the interface keeps
+	// the manual entry rather than showing an empty window.
+	discoverer, ok := client.(llm.Discoverer)
+	if !ok {
+		return nil, fmt.Errorf("protocol %q has no model list", provider.Protocol)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	remote, err := client.DiscoverModels(ctx)
+	remote, err := discoverer.DiscoverModels(ctx)
 	if err != nil {
 		return nil, err
 	}

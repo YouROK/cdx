@@ -612,3 +612,15 @@ func NewModelView(m store.Model) ModelView {
 		SkipTemp:       m.Compat.SupportsTemperature,
 	}
 }
+
+// listProtocols returns the protocol names the daemon supports.
+//
+// The interface builds its protocol choice from this list, so a new protocol
+// appears without a frontend change.
+func (s *Server) listProtocols(c *gin.Context) {
+	if s.deps.Protocols == nil {
+		c.JSON(http.StatusOK, gin.H{"protocols": []string{}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"protocols": s.deps.Protocols()})
+}

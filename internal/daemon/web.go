@@ -10,6 +10,7 @@ import (
 
 	"github.com/yourok/cdx/internal/config"
 	"github.com/yourok/cdx/internal/i18n"
+	"github.com/yourok/cdx/internal/llm"
 	"github.com/yourok/cdx/internal/logx"
 	"github.com/yourok/cdx/internal/perm"
 	"github.com/yourok/cdx/internal/sessions"
@@ -88,6 +89,7 @@ func (d *Daemon) webDeps() web.Deps {
 		SaveCfg: func(body map[string]any) (bool, error) {
 			return d.saveConfig(body)
 		},
+		Protocols: llm.Protocols,
 		Providers: func() ([]web.ProviderView, error) {
 			providers, err := d.store.ListProviders()
 			if err != nil {
