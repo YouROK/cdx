@@ -412,6 +412,8 @@ func (a *App) runPromptCmd(args []string) error {
 	noColor := false
 	quiet := false
 	jsonOut := false
+	promptFile := ""
+	promptFileSet := false
 	var promptParts []string
 
 	for i := 0; i < len(args); i++ {
@@ -437,6 +439,16 @@ func (a *App) runPromptCmd(args []string) error {
 			i++
 		case strings.HasPrefix(arg, "--preset="):
 			preset = strings.TrimPrefix(arg, "--preset=")
+		case arg == "--prompt-file" || arg == "-f":
+			if i+1 >= len(args) {
+				return errors.New("--prompt-file requires a path")
+			}
+			promptFile = args[i+1]
+			promptFileSet = true
+			i++
+		case strings.HasPrefix(arg, "--prompt-file="):
+			promptFile = strings.TrimPrefix(arg, "--prompt-file=")
+			promptFileSet = true
 		case arg == "--no-color":
 			noColor = true
 			disableColor()
@@ -449,9 +461,12 @@ func (a *App) runPromptCmd(args []string) error {
 		}
 	}
 
-	prompt := strings.TrimSpace(strings.Join(promptParts, " "))
-	if prompt == "" {
-		return errors.New("prompt is required")
+	if promptFileSet && promptFile == "" {
+		return errors.New("--prompt-file requires a path")
+	}
+	prompt, err := promptSource(a.Stdin, promptFile, promptParts)
+	if err != nil {
+		return err
 	}
 
 	if err := a.ensureDaemon(); err != nil {
@@ -583,6 +598,39 @@ func (a *App) runPromptCmd(args []string) error {
 	}
 	bell.ring()
 	return nil
+}
+
+// promptSource builds the prompt from an optional file and positional text.
+func promptSource(stdin io.Reader, file string, parts []string) (string, error) {
+	text := strings.Join(parts, " ")
+	if file != "" {
+		content, err := readPromptFile(stdin, file)
+		if err != nil {
+			return "", err
+		}
+		text = strings.TrimSpace(content) + " " + text
+	}
+	prompt := strings.TrimSpace(text)
+	if prompt == "" {
+		return "", errors.New("prompt is required")
+	}
+	return prompt, nil
+}
+
+// readPromptFile reads a prompt from a file, or from stdin when path is "-".
+func readPromptFile(stdin io.Reader, path string) (string, error) {
+	if path == "-" {
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return "", fmt.Errorf("failed to read prompt from stdin: %w", err)
+		}
+		return string(data), nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read prompt file: %w", err)
+	}
+	return string(data), nil
 }
 
 func (a *App) askContinuePrompt(question map[string]any) string {
@@ -877,6 +925,7 @@ Session commands:
 Flags:
   -m, --model <name>     Model ID or name to use
   -p, --preset <id>      Agent preset ID (standard, mini, creator, or custom)
+  -f, --prompt-file <path>  Read the prompt from a file ("-" reads stdin)
   -q, --quiet            Disable progress and the end-of-turn summary
       --json             Print the final result as JSON
       --no-color         Disable colored output

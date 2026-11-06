@@ -122,6 +122,37 @@ func TestFormatHelpers(t *testing.T) {
 	}
 }
 
+func TestPromptSourceCombinesFileAndText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task.md")
+	if err := os.WriteFile(path, []byte("  first line\nsecond line\n"), 0o644); err != nil {
+		t.Fatalf("write prompt file: %v", err)
+	}
+
+	got, err := promptSource(strings.NewReader(""), path, []string{"extra", "text"})
+	if err != nil {
+		t.Fatalf("prompt source failed: %v", err)
+	}
+	if want := "first line\nsecond line extra text"; got != want {
+		t.Fatalf("unexpected prompt: %q", got)
+	}
+
+	got, err = promptSource(strings.NewReader("from stdin\n"), "-", nil)
+	if err != nil {
+		t.Fatalf("stdin prompt source failed: %v", err)
+	}
+	if got != "from stdin" {
+		t.Fatalf("unexpected stdin prompt: %q", got)
+	}
+
+	if _, err := promptSource(strings.NewReader(""), "-", nil); err == nil || !strings.Contains(err.Error(), "prompt is required") {
+		t.Fatalf("expected empty prompt error, got: %v", err)
+	}
+
+	if _, err := promptSource(strings.NewReader(""), filepath.Join(t.TempDir(), "missing.md"), nil); err == nil || !strings.Contains(err.Error(), "failed to read prompt file") {
+		t.Fatalf("expected missing file error, got: %v", err)
+	}
+}
+
 func TestDaemonCommandDetachesStdio(t *testing.T) {
 	cmd := newDaemonCommand("/bin/true")
 	if cmd.Stdin != nil || cmd.Stdout != nil || cmd.Stderr != nil {
@@ -236,7 +267,30 @@ func TestCLIAndDaemonEndToEndWithPlugins(t *testing.T) {
 		t.Fatalf("unexpected stdout: %q", stdout.String())
 	}
 
-	// 3. Session commands do not require a prompt.
+	// 3. --prompt-file reads the prompt from a file and appends positional text.
+	promptPath := filepath.Join(tmp, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("prompt from a file"), 0o644); err != nil {
+		t.Fatalf("write prompt file: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	app.Stdin = strings.NewReader("")
+	if err := app.Run([]string{"--prompt-file", promptPath}); err != nil {
+		t.Fatalf("prompt file run failed: %v", err)
+	}
+	if strings.TrimSpace(stdout.String()) != "Done: prompt from a file" {
+		t.Fatalf("unexpected prompt file output: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := app.Run([]string{"--prompt-file=" + promptPath, "and text"}); err != nil {
+		t.Fatalf("inline prompt file run failed: %v", err)
+	}
+	if strings.TrimSpace(stdout.String()) != "Done: prompt from a file and text" {
+		t.Fatalf("unexpected inline prompt file output: %q", stdout.String())
+	}
+
+	// 4. Session commands do not require a prompt.
 	stdout.Reset()
 	stderr.Reset()
 	app.Stdin = strings.NewReader("")
@@ -275,7 +329,7 @@ func TestCLIAndDaemonEndToEndWithPlugins(t *testing.T) {
 		t.Fatalf("unexpected session delete output: %s", stdout.String())
 	}
 
-	// 4. --json prints a machine-readable result.
+	// 5. --json prints a machine-readable result.
 	stdout.Reset()
 	app.Stdin = strings.NewReader("")
 	if err := app.Run([]string{"--json", "json output"}); err != nil {

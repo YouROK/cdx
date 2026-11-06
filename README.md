@@ -47,6 +47,7 @@ cdx daemon run --http 127.0.0.1:8787   # start the background daemon
 cdx daemon status                     # state, plugins, HTTP address
 cdx daemon stop
 cdx "explain what this package does"  # one-shot request in the current directory
+cdx -f task.md                        # take the prompt from a file
 cdx session list                      # sessions bound to directories
 cdx plugins list                      # installed plugins and their tools
 ```
