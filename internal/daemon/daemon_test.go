@@ -54,29 +54,76 @@ func TestDefaultPluginsAndWebUI(t *testing.T) {
 		t.Fatalf("unexpected GET / response: %d %s", resp.StatusCode, string(body))
 	}
 
-	// 2. Verify all 6 default plugins are loaded in /api/core/status.
-	statusResp, err := http.Get(baseURL + "/api/core/status")
+	// 2. The auth plugin guards the API with the token embedded into the page.
+	token := tokenFromPage(t, string(body))
+	if token == "" {
+		t.Fatalf("the served page does not carry the API token: %s", string(body))
+	}
+	noToken, err := http.Get(baseURL + "/api/core/status")
 	if err != nil {
 		t.Fatalf("GET /api/core/status failed: %v", err)
 	}
+	noToken.Body.Close()
+	if noToken.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without a token, got %d", noToken.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, baseURL+"/api/core/status", nil)
+	req.Header.Set("X-CDX-Token", token)
+	req.Host = "attacker.example"
+	foreign, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/core/status with a foreign host failed: %v", err)
+	}
+	foreign.Body.Close()
+	if foreign.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for a non-local host, got %d", foreign.StatusCode)
+	}
+
+	// 3. Verify that every default plugin is loaded.
 	var statusData struct {
 		Plugins []map[string]any `json:"plugins"`
 		Tools   []map[string]any `json:"tools"`
 		UI      []map[string]any `json:"ui"`
 	}
+	statusResp := apiGet(t, baseURL+"/api/core/status", token)
 	_ = json.NewDecoder(statusResp.Body).Decode(&statusData)
 	statusResp.Body.Close()
 
-	if len(statusData.Plugins) != 6 {
-		t.Fatalf("expected 6 default plugins loaded, got %d: %+v", len(statusData.Plugins), statusData.Plugins)
+	if len(statusData.Plugins) != 7 {
+		t.Fatalf("expected 7 default plugins loaded, got %d: %+v", len(statusData.Plugins), statusData.Plugins)
 	}
 	if len(statusData.Tools) != 5 {
 		t.Fatalf("expected 5 local tools registered, got %d: %+v", len(statusData.Tools), statusData.Tools)
 	}
 
-	// 3. Test self-contained Providers plugin: add a provider with an encrypted API key and add a model.
+	// 4. The step-limit settings round-trip through the core API.
+	agentResp, err := apiPost(t, baseURL+"/api/core/agent", token, `{"max_steps":25,"step_limit_mode":"stop"}`)
+	if err != nil {
+		t.Fatalf("POST agent settings failed: %v", err)
+	}
+	var agentData struct {
+		MaxSteps      int    `json:"max_steps"`
+		StepLimitMode string `json:"step_limit_mode"`
+	}
+	_ = json.NewDecoder(agentResp.Body).Decode(&agentData)
+	agentResp.Body.Close()
+	if agentResp.StatusCode != http.StatusOK || agentData.MaxSteps != 25 || agentData.StepLimitMode != "stop" {
+		t.Fatalf("unexpected agent settings: status=%d data=%+v", agentResp.StatusCode, agentData)
+	}
+
+	badAgentResp, err := apiPost(t, baseURL+"/api/core/agent", token, `{"step_limit_mode":"sometimes"}`)
+	if err != nil {
+		t.Fatalf("POST invalid agent settings failed: %v", err)
+	}
+	badAgentResp.Body.Close()
+	if badAgentResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an unknown step limit mode, got %d", badAgentResp.StatusCode)
+	}
+
+	// 5. Test self-contained Providers plugin: add a provider with an encrypted API key and add a model.
 	provPayload := `{"name":"deepseek","protocol":"openai-chat","base_url":"https://api.deepseek.com/v1","api_key":"sk-test-secret-key"}`
-	pResp, err := http.Post(baseURL+"/api/plugins/providers/providers", "application/json", bytes.NewBufferString(provPayload))
+	pResp, err := apiPost(t, baseURL+"/api/plugins/providers/providers", token, provPayload)
 	if err != nil {
 		t.Fatalf("POST provider failed: %v", err)
 	}
@@ -88,7 +135,7 @@ func TestDefaultPluginsAndWebUI(t *testing.T) {
 	}
 
 	modelPayload := `{"provider":"deepseek","name":"ds-chat","remote":"deepseek-chat","context_window":64000,"default":true}`
-	mResp, err := http.Post(baseURL+"/api/plugins/providers/models", "application/json", bytes.NewBufferString(modelPayload))
+	mResp, err := apiPost(t, baseURL+"/api/plugins/providers/models", token, modelPayload)
 	if err != nil {
 		t.Fatalf("POST model failed: %v", err)
 	}
@@ -102,6 +149,50 @@ func TestDefaultPluginsAndWebUI(t *testing.T) {
 	if err != nil || len(models) != 1 || models[0].ID != "deepseek/ds-chat" {
 		t.Fatalf("expected core registry to list deepseek/ds-chat, got %+v (err=%v)", models, err)
 	}
+}
+
+// tokenFromPage extracts the API token that the webui plugin embeds into the page.
+func tokenFromPage(t *testing.T, page string) string {
+	t.Helper()
+	const marker = `window.__CDX_TOKEN__="`
+	start := strings.Index(page, marker)
+	if start == -1 {
+		return ""
+	}
+	rest := page[start+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end == -1 {
+		return ""
+	}
+	return rest[:end]
+}
+
+func apiGet(t *testing.T, url, token string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("build request failed: %v", err)
+	}
+	req.Header.Set("X-CDX-Token", token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s failed: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s returned %d", url, resp.StatusCode)
+	}
+	return resp
+}
+
+func apiPost(t *testing.T, url, token, payload string) (*http.Response, error) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBufferString(payload))
+	if err != nil {
+		t.Fatalf("build request failed: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CDX-Token", token)
+	return http.DefaultClient.Do(req)
 }
 
 func TestDeclarativeSettingsEndpoints(t *testing.T) {
@@ -148,8 +239,8 @@ func TestDeclarativeSettingsEndpoints(t *testing.T) {
 		t.Fatalf("GET settings failed: %v", err)
 	}
 	var snapshot struct {
-		Schema  map[string]any `json:"schema"`
-		Values  map[string]any `json:"values"`
+		Schema  map[string]any  `json:"schema"`
+		Values  map[string]any  `json:"values"`
 		Secrets map[string]bool `json:"secrets"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&snapshot)
@@ -164,7 +255,7 @@ func TestDeclarativeSettingsEndpoints(t *testing.T) {
 		t.Fatalf("POST settings failed: %v", err)
 	}
 	var saved struct {
-		Values  map[string]any `json:"values"`
+		Values  map[string]any  `json:"values"`
 		Secrets map[string]bool `json:"secrets"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&saved)

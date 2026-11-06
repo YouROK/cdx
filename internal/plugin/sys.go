@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -121,6 +123,18 @@ func (s *SysAPI) Exec(ctx context.Context, command, workdir string, timeoutMS in
 		"timed_out": runCtx.Err() == context.DeadlineExceeded,
 		"cancelled": runCtx.Err() == context.Canceled,
 	}, nil
+}
+
+// RandomHex returns n cryptographically random bytes as a lowercase hex string.
+func (s *SysAPI) RandomHex(n int) (string, error) {
+	if n < 1 || n > 64 {
+		return "", fmt.Errorf("random length must be between 1 and 64 bytes")
+	}
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("read random bytes: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // Fetch performs an HTTP request. If onLine is non-nil, the response body is read line by line (useful for SSE streaming).

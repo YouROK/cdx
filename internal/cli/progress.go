@@ -3,9 +3,14 @@ package cli
 import (
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
+
+// ansiPattern matches terminal escape sequences that must not reach the label.
+var ansiPattern = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
 
 // progressLine draws a single progress line and updates it in place.
 type progressLine struct {
@@ -71,12 +76,30 @@ func (p *progressLine) loop() {
 }
 
 func (p *progressLine) SetText(text string) {
+	// A label with line breaks would wrap into several terminal rows while the
+	// redraw only clears the last one, leaving a trail of stale lines.
+	text = singleLine(text)
 	if text == "" {
 		return
 	}
 	p.mu.Lock()
 	p.text = text
 	p.mu.Unlock()
+}
+
+// singleLine flattens arbitrary text into one printable line.
+func singleLine(text string) string {
+	text = ansiPattern.ReplaceAllString(text, "")
+	text = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t' || r == '\v' || r == '\f':
+			return ' '
+		case r < 0x20 || r == 0x7f:
+			return -1
+		}
+		return r
+	}, text)
+	return strings.Join(strings.Fields(text), " ")
 }
 
 func (p *progressLine) Stop() {

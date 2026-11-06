@@ -5,6 +5,7 @@ package live
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +17,47 @@ import (
 	"github.com/yourok/cdx/internal/daemon"
 	"github.com/yourok/cdx/internal/paths"
 )
+
+// pageToken reads the API token that the webui plugin embeds into the page.
+func pageToken(t *testing.T, baseURL string) string {
+	t.Helper()
+	resp, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET / failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	const marker = `window.__CDX_TOKEN__="`
+	start := strings.Index(string(body), marker)
+	if start == -1 {
+		t.Fatalf("the page does not carry the API token")
+	}
+	rest := string(body)[start+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end == -1 {
+		t.Fatalf("unterminated API token in the page")
+	}
+	return rest[:end]
+}
+
+// apiPost sends a JSON request to the daemon with the API token.
+func apiPost(t *testing.T, url, token, payload string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBufferString(payload))
+	if err != nil {
+		t.Fatalf("build request failed: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CDX-Token", token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s failed: %v", url, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
+}
 
 func repoPluginsDir(t *testing.T) string {
 	t.Helper()
@@ -49,22 +91,19 @@ func TestLiveBeamFreeModelAndTools(t *testing.T) {
 	defer d.Stop()
 
 	baseURL := "http://" + d.HTTPAddr()
+	token := pageToken(t, baseURL)
 
 	// 1. Configure opencode-go provider with the encrypted API key via the providers plugin HTTP API.
 	provBody := `{"name":"opencode-go","protocol":"openai-chat","base_url":"https://opencode.ai/zen/go/v1","api_key":"` + apiKey + `"}`
-	resp1, err := http.Post(baseURL+"/api/plugins/providers/providers", "application/json", bytes.NewBufferString(provBody))
-	if err != nil || resp1.StatusCode != http.StatusOK {
-		t.Fatalf("failed to configure provider: status=%v err=%v", resp1.StatusCode, err)
+	if status, body := apiPost(t, baseURL+"/api/plugins/providers/providers", token, provBody); status != http.StatusOK {
+		t.Fatalf("failed to configure provider: status=%d body=%s", status, body)
 	}
-	resp1.Body.Close()
 
 	// 2. Configure beam-free model via the providers plugin HTTP API.
 	modelBody := `{"provider":"opencode-go","name":"beam-free","remote":"beam-free","context_window":128000,"max_tokens":1024,"temperature":0.2,"default":true}`
-	resp2, err := http.Post(baseURL+"/api/plugins/providers/models", "application/json", bytes.NewBufferString(modelBody))
-	if err != nil || resp2.StatusCode != http.StatusOK {
-		t.Fatalf("failed to configure model: status=%v err=%v", resp2.StatusCode, err)
+	if status, body := apiPost(t, baseURL+"/api/plugins/providers/models", token, modelBody); status != http.StatusOK {
+		t.Fatalf("failed to configure model: status=%d body=%s", status, body)
 	}
-	resp2.Body.Close()
 
 	// 3. Create a test file on disk for the read_file tool to read.
 	secretFile := filepath.Join(tmp, "magic.txt")

@@ -3,7 +3,41 @@ import { createRoot } from "react-dom/client";
 import { apiFetch, postJSON } from "./api.js";
 import { SchemaForm } from "./SchemaForm.jsx";
 import { useUI } from "./ui.jsx";
-import baseCss from "../style.css?inline";
+
+// Panels get the shell stylesheet so they look native. The built stylesheet is
+// linked by URL; the inline copy is only a fallback for a dev server that
+// injects styles instead of linking them.
+async function createBaseStyles() {
+  const link = document.querySelector('link[rel="stylesheet"]');
+  if (link && link.href) {
+    const clone = document.createElement("link");
+    clone.rel = "stylesheet";
+    clone.href = link.href;
+    clone.dataset.cdxBase = "1";
+    return [clone];
+  }
+  const { default: css } = await import("../style.css?inline");
+  const tag = document.createElement("style");
+  tag.textContent = css;
+  tag.dataset.cdxBase = "1";
+  return [tag];
+}
+
+// A panel that writes container.innerHTML replaces the style nodes of the
+// shadow root. They are put back, so the panel keeps the dashboard look.
+function keepStyles(shadow, nodes) {
+  if (!nodes.length) return () => {};
+  const restore = () => {
+    const missing = nodes.filter((node) => !shadow.contains(node));
+    if (missing.length === 0) return;
+    for (let i = missing.length - 1; i >= 0; i -= 1) {
+      shadow.prepend(missing[i]);
+    }
+  };
+  const observer = new MutationObserver(restore);
+  observer.observe(shadow, { childList: true });
+  return () => observer.disconnect();
+}
 
 class PluginErrorBoundary extends Component {
   constructor(props) {
@@ -103,19 +137,22 @@ function PagePanel({ descriptor }) {
 
     const shadow = host.shadowRoot || host.attachShadow({ mode: "open" });
     shadow.replaceChildren();
-    const base = document.createElement("style");
-    base.textContent = baseCss;
-    shadow.appendChild(base);
 
-    for (const href of descriptor.styles || []) {
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = href;
-      shadow.appendChild(link);
-    }
+    let stopKeepingStyles = () => {};
+    let styleNodes = [];
 
     (async () => {
       try {
+        styleNodes = await createBaseStyles();
+        for (const node of styleNodes) shadow.appendChild(node);
+        for (const href of descriptor.styles || []) {
+          const link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.href = href;
+          shadow.appendChild(link);
+          styleNodes.push(link);
+        }
+        stopKeepingStyles = keepStyles(shadow, styleNodes);
         const mod = await import(/* @vite-ignore */ descriptor.entry);
         const mount = typeof mod.mount === "function" ? mod.mount : mod.default;
         if (typeof mount !== "function") {
@@ -133,6 +170,7 @@ function PagePanel({ descriptor }) {
 
     return () => {
       disposed = true;
+      stopKeepingStyles();
       if (typeof cleanup === "function") cleanup();
       if (rootRef.current) {
         rootRef.current.unmount();

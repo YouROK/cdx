@@ -519,7 +519,7 @@ function setup(cdx) {
     var name = String(body.name || "");
     var provider = findProvider(name);
     if (!provider) {
-      ctx.json(404, { ok: false, message: "provider not found" });
+      ctx.json(404, { error: "provider not found" });
       return;
     }
     var apiKey = cdx.secrets.get(secretKeyFor(name)) || "";
@@ -593,9 +593,15 @@ function setup(cdx) {
         headers["Authorization"] = "Bearer " + apiKey;
       }
     }
-    var resp = cdx.sys.fetch(url, { method: "GET", headers: headers, timeout_ms: 15000 });
+    var resp;
+    try {
+      resp = cdx.sys.fetch(url, { method: "GET", headers: headers, timeout_ms: 15000 });
+    } catch (e) {
+      ctx.json(502, { error: "discover failed: " + String(e) });
+      return;
+    }
     if (!resp.ok) {
-      ctx.json(502, { error: "discover failed (" + resp.status + ")" });
+      ctx.json(502, { error: "discover failed (HTTP " + resp.status + ")" });
       return;
     }
     var parsed = JSON.parse(resp.body || "{}");

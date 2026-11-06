@@ -4,11 +4,26 @@ function setup(cdx) {
     if (!cfg) {
       cfg = {
         load_agents_md: true,
-        max_messages: 40
+        max_messages: 40,
+        max_summary_chars: 8000
       };
       cdx.storage.set("config", cfg);
     }
     return cfg;
+  }
+
+  // The summary keeps growing as messages are compacted, so it is capped and
+  // the newest part is kept.
+  function clipSummary(text, limit) {
+    if (!text) return "";
+    if (limit < 1000) limit = 1000;
+    if (text.length <= limit) return text;
+    return "...[older summary trimmed]\n" + text.slice(text.length - limit);
+  }
+
+  function summaryLimit(cfg) {
+    var limit = Number(cfg.max_summary_chars);
+    return limit > 0 ? limit : 8000;
   }
 
   function tryReadContextFiles(workdir) {
@@ -74,7 +89,7 @@ function setup(cdx) {
     }
 
     if (payload.summary) {
-      parts.push("## Previous conversation summary\n\n" + payload.summary);
+      parts.push("## Previous conversation summary\n\n" + clipSummary(payload.summary, summaryLimit(cfg)));
     }
 
     parts.push(buildEnvironmentBlock(payload));
@@ -84,27 +99,41 @@ function setup(cdx) {
     var maxMsgs = cfg.max_messages || 40;
     var msgs = payload.messages || [];
     if (msgs.length > maxMsgs) {
-      var dropped = msgs.length - maxMsgs;
+      var keepFrom = msgs.length - maxMsgs;
       // Never start the kept history with a tool result: OpenAI-compatible
       // providers reject a tool message without the assistant tool_calls
       // message that produced it.
-      while (dropped < msgs.length && msgs[dropped] && msgs[dropped].role === "tool") {
-        dropped++;
+      while (keepFrom < msgs.length && msgs[keepFrom] && msgs[keepFrom].role === "tool") {
+        keepFrom++;
       }
-      if (dropped >= msgs.length) {
+      if (keepFrom >= msgs.length) {
         return payload;
       }
-      var oldSlice = msgs.slice(0, dropped);
-      var summaryLines = [];
-      for (var j = 0; j < oldSlice.length; j++) {
-        var m = oldSlice[j];
-        if (m.role && m.content) {
-          var snippet = String(m.content).slice(0, 160);
-          summaryLines.push(m.role + ": " + snippet);
-        }
+
+      // Each turn passes the whole history, so the oldest messages must be
+      // summarized once, not again and again.
+      var counterKey = "summarized:" + String(payload.session_id || "default");
+      var already = Number(cdx.storage.get(counterKey)) || 0;
+      if (already > keepFrom) {
+        already = keepFrom;
       }
-      payload.summary = (payload.summary ? payload.summary + "\n" : "") + summaryLines.join("\n");
-      payload.messages = msgs.slice(dropped);
+      if (keepFrom > already) {
+        var summaryLines = [];
+        for (var j = already; j < keepFrom; j++) {
+          var m = msgs[j];
+          if (m && m.role && m.content) {
+            summaryLines.push(m.role + ": " + String(m.content).slice(0, 160));
+          }
+        }
+        if (summaryLines.length > 0) {
+          payload.summary = clipSummary(
+            (payload.summary ? payload.summary + "\n" : "") + summaryLines.join("\n"),
+            summaryLimit(cfg)
+          );
+        }
+        cdx.storage.set(counterKey, keepFrom);
+      }
+      payload.messages = msgs.slice(keepFrom);
     }
 
     return payload;
@@ -119,6 +148,9 @@ function setup(cdx) {
     var cfg = getSettings();
     if (typeof body.load_agents_md === "boolean") cfg.load_agents_md = body.load_agents_md;
     if (typeof body.max_messages === "number" && body.max_messages >= 4) cfg.max_messages = body.max_messages;
+    if (typeof body.max_summary_chars === "number" && body.max_summary_chars >= 1000) {
+      cfg.max_summary_chars = Math.min(body.max_summary_chars, 100000);
+    }
     cdx.storage.set("config", cfg);
     ctx.json(200, cfg);
   });
@@ -137,6 +169,14 @@ function setup(cdx) {
           title: "Load AGENTS.md",
           description: "Read AGENTS.md or CLAUDE.md from the working directory before each turn.",
           default: true
+        },
+        max_summary_chars: {
+          type: "integer",
+          title: "Summary size limit",
+          description: "Characters kept from the conversation summary before older parts are dropped.",
+          minimum: 1000,
+          maximum: 100000,
+          default: 8000
         },
         max_messages: {
           type: "integer",

@@ -11,7 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"sort"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -475,6 +476,7 @@ func (a *App) runPromptCmd(args []string) error {
 
 	var thinking strings.Builder
 	summary := newTurnSummary()
+	turnStart := time.Now()
 	res, err := ipc.Call(context.Background(), a.Layout.SocketPath, "turn.run", map[string]any{
 		"workdir": workdir,
 		"mode":    mode,
@@ -513,13 +515,13 @@ func (a *App) runPromptCmd(args []string) error {
 					spinner.SetText("writing answer...")
 				}
 			case "tool_end":
-				summary.recordEnd(ev)
 				if spinner != nil {
 					spinner.SetText(toolProgressLabel(ev) + " done")
 				}
 			}
 		},
 		OnPrompt: func(question map[string]any) (map[string]any, error) {
+			bell.ring()
 			if kind, _ := question["kind"].(string); kind == "max_steps" {
 				if quiet || jsonOut || !isTTYOut {
 					return map[string]any{"choice": "stop", "allow": false}, nil
@@ -539,7 +541,6 @@ func (a *App) runPromptCmd(args []string) error {
 					"allow":  choice == "continue",
 				}, nil
 			}
-			bell.ring()
 			if spinner != nil {
 				spinner.Stop()
 				spinner = nil
@@ -574,7 +575,7 @@ func (a *App) runPromptCmd(args []string) error {
 			fmt.Fprint(a.Stdout, newRenderer(color).Render(content))
 		}
 		if isTTYOut && !quiet && !jsonOut {
-			fmt.Fprint(a.Stderr, summary.format(resMap))
+			fmt.Fprint(a.Stderr, summary.format(resMap, time.Since(turnStart)))
 		}
 	} else {
 		raw, _ := json.Marshal(res)
@@ -592,7 +593,11 @@ func (a *App) askContinuePrompt(question map[string]any) string {
 	steps, _ := question["steps"].(float64)
 	addSteps, _ := question["add_steps"].(float64)
 	fmt.Fprintf(a.Stderr, "\nThe model made %d requests without a final answer.\n", int(steps))
-	fmt.Fprintf(a.Stderr, "Continue with %d more steps? [Y/n]: ", int(addSteps))
+	if addSteps <= 0 {
+		fmt.Fprint(a.Stderr, "Continue without a step limit? [Y/n]: ")
+	} else {
+		fmt.Fprintf(a.Stderr, "Continue with %d more steps? [Y/n]: ", int(addSteps))
+	}
 
 	reader := bufio.NewReader(a.Stdin)
 	line, err := reader.ReadString('\n')
@@ -607,58 +612,19 @@ func (a *App) askContinuePrompt(question map[string]any) string {
 }
 
 func (a *App) askPermissionPrompt(question map[string]any) string {
-	tool, _ := question["tool"].(string)
-	level, _ := question["permission"].(string)
-	if level == "" {
-		level, _ = question["level"].(string)
+	p := buildPermissionPrompt(question, terminalWidth())
+	fmt.Fprintln(a.Stderr)
+	for _, line := range p.lines {
+		fmt.Fprintln(a.Stderr, line)
 	}
-	if level == "" {
-		level = "edit"
-	}
-	summary, _ := question["summary"].(string)
-	if summary == "" {
-		summary, _ = question["question"].(string)
-	}
-	if summary == "" {
-		summary = tool
-	}
-
-	options := []string{"once", "session", "daemon", "always", "deny"}
-	if rawOpts, ok := question["options"].([]any); ok && len(rawOpts) > 0 {
-		options = options[:0]
-		for _, item := range rawOpts {
-			if s, ok := item.(string); ok && s != "" {
-				options = append(options, s)
-			}
-		}
-	}
-
-	clipped := clipText(summary, terminalWidth()-30)
-	fmt.Fprintf(a.Stderr, "\npermission required: %s %s\n",
-		styleAction(clipped), styleLevel(level))
-	for i, opt := range options {
-		fmt.Fprintf(a.Stderr, "  [%d] %s\n", i+1, opt)
-	}
-	fmt.Fprint(a.Stderr, "choose: ")
+	fmt.Fprint(a.Stderr, p.prompt)
 
 	reader := bufio.NewReader(a.Stdin)
 	line, err := reader.ReadString('\n')
-	if err != nil && len(line) == 0 {
+	if err != nil && strings.TrimSpace(line) == "" {
 		return "deny"
 	}
-	choice := strings.ToLower(strings.TrimSpace(line))
-	if choice == "y" || choice == "yes" {
-		return "once"
-	}
-	if choice == "n" || choice == "no" {
-		return "deny"
-	}
-	for i, opt := range options {
-		if choice == fmt.Sprintf("%d", i+1) || choice == strings.ToLower(opt) {
-			return opt
-		}
-	}
-	return "deny"
+	return parsePromptAnswer(line, p)
 }
 
 func (a *App) stopDaemon() error {
@@ -749,15 +715,11 @@ func toolProgressLabel(ev map[string]any) string {
 }
 
 type turnSummary struct {
-	toolCounts map[string]int
-	changed    []string
-	read       []string
-	shell      []string
-	errors     []string
+	changed []string
 }
 
 func newTurnSummary() *turnSummary {
-	return &turnSummary{toolCounts: map[string]int{}}
+	return &turnSummary{}
 }
 
 func (s *turnSummary) addUnique(list []string, value string) []string {
@@ -775,83 +737,33 @@ func (s *turnSummary) addUnique(list []string, value string) []string {
 
 func (s *turnSummary) recordStart(ev map[string]any) {
 	name, _ := ev["tool_name"].(string)
-	if name == "" {
-		name = "tool"
-	}
-	s.toolCounts[name]++
 	args, _ := ev["tool_args"].(map[string]any)
 	path, _ := args["path"].(string)
 	switch name {
 	case "write_file", "edit_file":
 		s.changed = s.addUnique(s.changed, path)
-	case "read_file", "list_dir":
-		s.read = s.addUnique(s.read, path)
-	case "shell":
-		command, _ := args["command"].(string)
-		s.shell = s.addUnique(s.shell, command)
 	}
 }
 
-func (s *turnSummary) recordEnd(ev map[string]any) {
-	out, _ := ev["tool_out"].(string)
-	if !strings.HasPrefix(out, "error:") {
-		return
-	}
-	name, _ := ev["tool_name"].(string)
-	line := strings.TrimSpace(out)
-	if len(line) > 200 {
-		line = line[:200] + "..."
-	}
-	s.errors = s.addUnique(s.errors, name+": "+line)
-}
-
-func limited(items []string, n int) []string {
-	if len(items) <= n {
-		return items
-	}
-	return items[:n]
-}
-
-func formatList(title string, items []string) string {
-	if len(items) == 0 {
-		return ""
-	}
-	return title + ": " + strings.Join(items, ", ") + "\n"
-}
-
-func (s *turnSummary) format(res map[string]any) string {
+// format renders the short end-of-turn line: duration, steps, tokens, changes.
+func (s *turnSummary) format(res map[string]any, elapsed time.Duration) string {
 	var b strings.Builder
 	b.WriteString("---\n")
 
-	steps := 0
-	if v, ok := res["steps"].(float64); ok {
-		steps = int(v)
+	parts := []string{"Done in " + formatDuration(elapsed), fmt.Sprintf("%d steps", int(numberField(res, "steps")))}
+	tokensIn, tokensOut := sessionTokens(res)
+	if tokensIn > 0 || tokensOut > 0 {
+		parts = append(parts, fmt.Sprintf("%s in / %s out tokens", formatTokens(tokensIn), formatTokens(tokensOut)))
 	}
+	b.WriteString(strings.Join(parts, ", ") + "\n")
+
+	if len(s.changed) > 0 {
+		b.WriteString("Changed: " + s.changedLine() + "\n")
+	}
+
 	content, _ := res["content"].(string)
-	stopped, _ := res["stopped_reason"].(string)
-
-	b.WriteString(fmt.Sprintf("Steps: %d\n", steps))
-
-	if len(s.toolCounts) > 0 {
-		names := make([]string, 0, len(s.toolCounts))
-		for name := range s.toolCounts {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		parts := make([]string, 0, len(names))
-		for _, name := range names {
-			parts = append(parts, fmt.Sprintf("%s x%d", name, s.toolCounts[name]))
-		}
-		b.WriteString("Tools: " + strings.Join(parts, ", ") + "\n")
-	}
-
-	b.WriteString(formatList("Changed files", limited(s.changed, 5)))
-	b.WriteString(formatList("Read paths", limited(s.read, 5)))
-	b.WriteString(formatList("Shell commands", limited(s.shell, 3)))
-	b.WriteString(formatList("Tool errors", limited(s.errors, 3)))
-
 	if strings.TrimSpace(content) == "" {
-		switch stopped {
+		switch stopped, _ := res["stopped_reason"].(string); stopped {
 		case "max_steps":
 			b.WriteString("Stopped: the model reached the tool-step limit and did not produce a final answer\n")
 		case "empty_answer":
@@ -859,11 +771,91 @@ func (s *turnSummary) format(res map[string]any) string {
 		default:
 			b.WriteString("Stopped: the model did not produce a final answer\n")
 		}
-	} else if stopped == "max_steps" {
-		b.WriteString("Stopped: the model reached the tool-step limit\n")
 	}
-
 	return b.String()
+}
+
+// changedLine lists a few changed files by name, so the line stays short.
+func (s *turnSummary) changedLine() string {
+	names := make([]string, 0, len(s.changed))
+	for _, path := range s.changed {
+		names = append(names, filepath.Base(path))
+	}
+	shown := names
+	if len(shown) > 3 {
+		shown = shown[:3]
+	}
+	line := fmt.Sprintf("%d files", len(names))
+	if len(names) == 1 {
+		line = "1 file"
+	}
+	line += " (" + strings.Join(shown, ", ")
+	if len(names) > len(shown) {
+		line += fmt.Sprintf(", +%d more", len(names)-len(shown))
+	}
+	return line + ")"
+}
+
+func sessionTokens(res map[string]any) (int64, int64) {
+	session, _ := res["session"].(map[string]any)
+	if session == nil {
+		return 0, 0
+	}
+	return int64(numberField(session, "tokens_in")), int64(numberField(session, "tokens_out"))
+}
+
+func numberField(values map[string]any, key string) float64 {
+	switch value := values[key].(type) {
+	case float64:
+		return value
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case json.Number:
+		parsed, _ := value.Float64()
+		return parsed
+	}
+	return 0
+}
+
+func formatDuration(elapsed time.Duration) string {
+	if elapsed < time.Second {
+		elapsed = time.Second
+	}
+	elapsed = elapsed.Round(time.Second)
+	if elapsed < time.Minute {
+		return fmt.Sprintf("%ds", int(elapsed.Seconds()))
+	}
+	if elapsed < time.Hour {
+		minutes := int(elapsed / time.Minute)
+		seconds := int(elapsed.Seconds()) % 60
+		if seconds == 0 {
+			return fmt.Sprintf("%dm", minutes)
+		}
+		return fmt.Sprintf("%dm%ds", minutes, seconds)
+	}
+	hours := int(elapsed / time.Hour)
+	minutes := int(elapsed/time.Minute) % 60
+	if minutes == 0 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dh%dm", hours, minutes)
+}
+
+func formatTokens(count int64) string {
+	switch {
+	case count < 1000:
+		return strconv.FormatInt(count, 10)
+	case count < 1000000:
+		return trimZero(float64(count)/1000) + "k"
+	default:
+		return trimZero(float64(count)/1000000) + "M"
+	}
+}
+
+func trimZero(value float64) string {
+	return strings.TrimSuffix(strconv.FormatFloat(value, 'f', 1, 64), ".0")
 }
 
 func (a *App) printUsage() {

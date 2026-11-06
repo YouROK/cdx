@@ -147,3 +147,28 @@ func TestExecKillsChildProcessesOnTimeout(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestRandomHex(t *testing.T) {
+	api := NewSysAPI()
+
+	first, err := api.RandomHex(16)
+	if err != nil {
+		t.Fatalf("RandomHex failed: %v", err)
+	}
+	if len(first) != 32 {
+		t.Fatalf("expected 32 hex characters, got %d", len(first))
+	}
+	second, err := api.RandomHex(16)
+	if err != nil {
+		t.Fatalf("RandomHex failed: %v", err)
+	}
+	if first == second {
+		t.Fatalf("RandomHex returned the same value twice")
+	}
+
+	for _, n := range []int{0, -1, 65} {
+		if _, err := api.RandomHex(n); err == nil {
+			t.Fatalf("expected an error for %d bytes", n)
+		}
+	}
+}

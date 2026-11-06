@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -329,23 +330,168 @@ func TestAgentStepSettings(t *testing.T) {
 	if got := orch.MaxSteps(); got != DefaultMaxSteps {
 		t.Fatalf("default max steps = %d, want %d", got, DefaultMaxSteps)
 	}
-	if !orch.AskOnMaxSteps() {
-		t.Fatal("ask_on_max_steps must default to true")
+	if got := orch.StepLimitMode(); got != StepLimitAsk {
+		t.Fatalf("default step limit mode = %q, want %q", got, StepLimitAsk)
 	}
 	if err := orch.SetMaxSteps(80); err != nil {
 		t.Fatalf("SetMaxSteps: %v", err)
 	}
-	if err := orch.SetAskOnMaxSteps(false); err != nil {
-		t.Fatalf("SetAskOnMaxSteps: %v", err)
+	if err := orch.SetStepLimitMode(StepLimitStop); err != nil {
+		t.Fatalf("SetStepLimitMode: %v", err)
 	}
 	if got := orch.MaxSteps(); got != 80 {
 		t.Fatalf("max steps = %d, want 80", got)
 	}
-	if orch.AskOnMaxSteps() {
-		t.Fatal("ask_on_max_steps must be false after update")
+	if got := orch.StepLimitMode(); got != StepLimitStop {
+		t.Fatalf("step limit mode = %q, want %q", got, StepLimitStop)
 	}
 	if err := orch.SetMaxSteps(0); err == nil {
 		t.Fatal("zero max steps must be rejected")
+	}
+	if err := orch.SetMaxSteps(-1); err == nil {
+		t.Fatal("negative max steps must be rejected")
+	}
+	if err := orch.SetMaxSteps(201); err == nil {
+		t.Fatal("max steps above 200 must be rejected")
+	}
+	if err := orch.SetStepLimitMode("unknown"); err == nil {
+		t.Fatal("unknown step limit mode must be rejected")
+	}
+}
+
+func TestStepLimitModeReadsLegacySettings(t *testing.T) {
+	orch, _, _, _ := setupTestOrchestrator(t)
+
+	if err := orch.store.PutState("max_steps", 0); err != nil {
+		t.Fatalf("PutState: %v", err)
+	}
+	if got := orch.StepLimitMode(); got != StepLimitNone {
+		t.Fatalf("a zero budget must mean no limit, got %q", got)
+	}
+
+	if err := orch.store.PutState("max_steps", 20); err != nil {
+		t.Fatalf("PutState: %v", err)
+	}
+	if err := orch.store.PutState("ask_on_max_steps", false); err != nil {
+		t.Fatalf("PutState: %v", err)
+	}
+	if got := orch.StepLimitMode(); got != StepLimitStop {
+		t.Fatalf("ask_on_max_steps=false must mean stop, got %q", got)
+	}
+
+	if err := orch.store.PutState("ask_on_max_steps", true); err != nil {
+		t.Fatalf("PutState: %v", err)
+	}
+	if got := orch.StepLimitMode(); got != StepLimitAsk {
+		t.Fatalf("ask_on_max_steps=true must mean ask, got %q", got)
+	}
+
+	if err := orch.SetStepLimitMode(StepLimitNone); err != nil {
+		t.Fatalf("SetStepLimitMode: %v", err)
+	}
+	if got := orch.StepLimitMode(); got != StepLimitNone {
+		t.Fatalf("stored mode must win over legacy settings, got %q", got)
+	}
+}
+
+func TestRunTurnWithoutStepLimit(t *testing.T) {
+	orch, _, reg, _ := setupTestOrchestrator(t)
+	if err := orch.SetMaxSteps(3); err != nil {
+		t.Fatalf("SetMaxSteps: %v", err)
+	}
+	if err := orch.SetStepLimitMode(StepLimitNone); err != nil {
+		t.Fatalf("SetStepLimitMode: %v", err)
+	}
+
+	calls := 0
+	reg.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(_ context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "m1", Name: "m1", Default: true}}, nil
+		},
+		Complete: func(_ context.Context, _ plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			calls++
+			if calls < 6 {
+				return &plugin.CompleteResponse{
+					ToolCalls: []map[string]any{
+						{"id": fmt.Sprintf("call_%d", calls), "name": "noop", "arguments": map[string]any{}},
+					},
+				}, nil
+			}
+			return &plugin.CompleteResponse{Content: "done"}, nil
+		},
+	})
+
+	res, err := orch.RunTurn(context.Background(), TurnRequest{
+		Workdir: "/work",
+		Mode:    ModeAuto,
+		Prompt:  "run until done",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunTurn failed: %v", err)
+	}
+	if res.Steps != 6 {
+		t.Fatalf("expected 6 steps without a limit, got %d", res.Steps)
+	}
+	if res.StoppedReason != "" {
+		t.Fatalf("unlimited turn must not stop on max_steps, got %q", res.StoppedReason)
+	}
+	if res.Content != "done" {
+		t.Fatalf("unexpected content: %q", res.Content)
+	}
+}
+
+// TestTurnLiftsStepLimitMidTurn covers switching the mode to no limit while a turn runs:
+// the running turn becomes unlimited instead of stopping at the budget.
+func TestTurnLiftsStepLimitMidTurn(t *testing.T) {
+	orch, eb, reg, _ := setupTestOrchestrator(t)
+	if err := orch.SetMaxSteps(2); err != nil {
+		t.Fatalf("SetMaxSteps: %v", err)
+	}
+
+	calls := 0
+	reg.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(_ context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "m1", Name: "m1", Default: true}}, nil
+		},
+		Complete: func(_ context.Context, _ plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			calls++
+			if calls == 2 {
+				if err := orch.SetStepLimitMode(StepLimitNone); err != nil {
+					t.Errorf("SetStepLimitMode: %v", err)
+				}
+			}
+			if calls < 5 {
+				return &plugin.CompleteResponse{
+					ToolCalls: []map[string]any{
+						{"id": fmt.Sprintf("call_%d", calls), "name": "noop", "arguments": map[string]any{}},
+					},
+				}, nil
+			}
+			return &plugin.CompleteResponse{Content: "done"}, nil
+		},
+	})
+
+	prompts := 0
+	eb.Handle("test", "client:prompt_user", func(_ context.Context, _ any) (any, error) {
+		prompts++
+		return map[string]any{"allow": true}, nil
+	})
+
+	res, err := orch.RunTurn(context.Background(), TurnRequest{
+		Workdir: "/work",
+		Mode:    ModeAuto,
+		Prompt:  "run until done",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunTurn failed: %v", err)
+	}
+	if prompts != 0 {
+		t.Fatalf("prompts = %d, want 0: a zero limit must not ask to extend", prompts)
+	}
+	if res.Steps != 5 || res.Content != "done" || res.StoppedReason != "" {
+		t.Fatalf("expected 5 steps and a final answer, got steps=%d content=%q reason=%q", res.Steps, res.Content, res.StoppedReason)
 	}
 }
 
@@ -354,8 +500,8 @@ func TestRunTurnUsesConfiguredMaxSteps(t *testing.T) {
 	if err := orch.SetMaxSteps(7); err != nil {
 		t.Fatalf("SetMaxSteps: %v", err)
 	}
-	if err := orch.SetAskOnMaxSteps(false); err != nil {
-		t.Fatalf("SetAskOnMaxSteps: %v", err)
+	if err := orch.SetStepLimitMode(StepLimitStop); err != nil {
+		t.Fatalf("SetStepLimitMode: %v", err)
 	}
 
 	reg.RegisterProvider(plugin.ProviderEntry{
@@ -412,6 +558,9 @@ func TestTurnAsksToExtendStepBudget(t *testing.T) {
 		question, _ := payload.(map[string]any)
 		if question["kind"] != "max_steps" {
 			return map[string]any{"allow": false}, nil
+		}
+		if add, _ := question["add_steps"].(int); add != 2 {
+			t.Errorf("add_steps = %v, want the configured budget 2", question["add_steps"])
 		}
 		return map[string]any{"allow": prompts == 1}, nil
 	})
@@ -502,5 +651,127 @@ func TestTurnLoopWithToolCallsAndPermissionHooks(t *testing.T) {
 	}
 	if res.Content != "Tool result was: error: blocked by permissions plugin" {
 		t.Fatalf("unexpected final content: %q", res.Content)
+	}
+}
+
+// TestInterruptedTurnKeepsHistory covers a turn cancelled in the middle: the prompt,
+// the model answer, and the tool result must stay in the session.
+func TestInterruptedTurnKeepsHistory(t *testing.T) {
+	orch, _, reg, _ := setupTestOrchestrator(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	reg.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(_ context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "m1", Name: "m1", Default: true}}, nil
+		},
+		Complete: func(_ context.Context, _ plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			cancel()
+			return &plugin.CompleteResponse{
+				Content: "checking",
+				ToolCalls: []map[string]any{
+					{"id": "call_1", "name": "noop", "arguments": map[string]any{}},
+				},
+			}, nil
+		},
+	})
+
+	sess, err := orch.ResolveForWorkdir("/work", ModeAuto)
+	if err != nil {
+		t.Fatalf("ResolveForWorkdir: %v", err)
+	}
+
+	if _, err := orch.RunTurn(ctx, TurnRequest{
+		Workdir: "/work",
+		Mode:    ModeAuto,
+		Prompt:  "check the network",
+	}, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	msgs, err := orch.GetMessages(sess.ID)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected prompt, answer, and tool result, got %d messages: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "user" || msgs[0].Content != "check the network" {
+		t.Fatalf("prompt was not kept: %+v", msgs[0])
+	}
+	if msgs[1].Role != "assistant" || len(msgs[1].ToolCalls) != 1 {
+		t.Fatalf("model answer was not kept: %+v", msgs[1])
+	}
+	if msgs[2].Role != "tool" || msgs[2].ToolCallID != "call_1" {
+		t.Fatalf("tool result was not kept: %+v", msgs[2])
+	}
+
+	stored, found, err := orch.GetSession(sess.ID)
+	if err != nil || !found {
+		t.Fatalf("GetSession: found=%v err=%v", found, err)
+	}
+	if stored.StoppedReason != "interrupted" {
+		t.Fatalf("stopped reason = %q, want interrupted", stored.StoppedReason)
+	}
+	if stored.MessageCount != 3 {
+		t.Fatalf("message count = %d, want 3", stored.MessageCount)
+	}
+}
+
+// TestTurnDropsUnansweredToolCalls covers a session saved by a killed turn: calls without
+// results must not reach the provider or the next saved history.
+func TestTurnDropsUnansweredToolCalls(t *testing.T) {
+	orch, _, reg, _ := setupTestOrchestrator(t)
+
+	sess, err := orch.ResolveForWorkdir("/work", ModeAuto)
+	if err != nil {
+		t.Fatalf("ResolveForWorkdir: %v", err)
+	}
+	if err := orch.SaveMessages(sess, []Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", ToolCalls: []map[string]any{
+			{"id": "call_9", "name": "noop"},
+		}},
+	}); err != nil {
+		t.Fatalf("SaveMessages: %v", err)
+	}
+
+	var sent []map[string]any
+	reg.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(_ context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "m1", Name: "m1", Default: true}}, nil
+		},
+		Complete: func(_ context.Context, req plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			sent = req.Messages
+			return &plugin.CompleteResponse{Content: "ok"}, nil
+		},
+	})
+
+	if _, err := orch.RunTurn(context.Background(), TurnRequest{
+		Workdir: "/work",
+		Mode:    ModeAuto,
+		Prompt:  "second",
+	}, nil); err != nil {
+		t.Fatalf("RunTurn failed: %v", err)
+	}
+
+	for _, m := range sent {
+		if _, ok := m["tool_calls"]; ok {
+			t.Fatalf("unanswered tool calls reached the provider: %+v", m)
+		}
+		if m["role"] == "tool" {
+			t.Fatalf("orphan tool result reached the provider: %+v", m)
+		}
+	}
+
+	msgs, err := orch.GetMessages(sess.ID)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected the repaired history plus the new prompt and answer, got %d: %+v", len(msgs), msgs)
 	}
 }

@@ -1,6 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, postJSON } from "./api.js";
 import { useUI } from "./ui.jsx";
+import { Hint } from "./hint.jsx";
+
+// Descriptions longer than this move into the hint popover, so a form with
+// several fields stays compact.
+const INLINE_HINT_LIMIT = 70;
 
 function defaultsOf(schema) {
   const out = {};
@@ -51,6 +56,9 @@ export function SchemaForm({ descriptor }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   const properties = useMemo(() => {
     return Object.entries(loadedSchema?.properties || {});
@@ -58,9 +66,10 @@ export function SchemaForm({ descriptor }) {
 
   const required = useMemo(() => new Set(loadedSchema?.required || []), [loadedSchema]);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let alive = true;
     setLoading(true);
+    setFailed(false);
     setError("");
     apiFetch(endpoint)
       .then((data) => {
@@ -73,11 +82,17 @@ export function SchemaForm({ descriptor }) {
           setValues({ ...defaultsOf(schema), ...(data || {}) });
           setSecrets({});
         }
+        setBusy(false);
       })
       .catch((err) => {
         if (!alive) return;
+        setFailed(true);
         setError(String(err.message || err));
-        setValues(defaultsOf(schema));
+        if (err && err.status === 503) {
+          // The plugin VM waits for the terminal answer: retry until it is free.
+          setBusy(true);
+          setAttempt((current) => current + 1);
+        }
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -87,12 +102,23 @@ export function SchemaForm({ descriptor }) {
     };
   }, [descriptor.plugin_id, endpoint, generic, schema]);
 
+  useEffect(() => {
+    return load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setTimeout(load, 3000);
+    return () => clearTimeout(timer);
+  }, [busy, attempt, load]);
+
   function update(name, value) {
     setValues((current) => ({ ...current, [name]: value }));
   }
 
   async function submit(event) {
     event.preventDefault();
+    if (failed) return;
     const payload = {};
     for (const [name, prop] of properties) {
       const value = values[name];
@@ -146,6 +172,24 @@ export function SchemaForm({ descriptor }) {
           {descriptor.description ? <p className="page-intro m-0">{descriptor.description}</p> : null}
         </div>
       </div>
+      {failed ? (
+        <div className="panel error-panel">
+          <h4 className="m-0 mb-xs">{busy ? "Waiting for the plugin" : "Settings are not available"}</h4>
+          <p className="muted m-0">{error}</p>
+          {busy ? (
+            <p className="muted mt-2">
+              The plugin is waiting for an answer in the terminal. This page refreshes by itself once the answer is
+              given.
+            </p>
+          ) : null}
+          <p className="muted mt-2">
+            Saving is disabled until the current values are loaded, so defaults do not overwrite them.
+          </p>
+          <button type="button" className="btn btn-default" onClick={load}>
+            Retry
+          </button>
+        </div>
+      ) : (
       <div className="panel">
         {error ? <div className="error-text mb-md">{error}</div> : null}
         <form className="form-stack" onSubmit={submit}>
@@ -169,22 +213,32 @@ export function SchemaForm({ descriptor }) {
           </div>
         </form>
       </div>
+      )}
     </div>
   );
 }
 
 function SchemaField({ name, prop, value, secretSet, required, onChange }) {
   const title = prop.title || name;
-  const hint = prop.description ? <span className="field-hint">{prop.description}</span> : null;
+  const description = prop.description ? String(prop.description) : "";
+  const inlineHint = description && description.length <= INLINE_HINT_LIMIT ? description : "";
+  const titleNode = (
+    <span className="field-title">
+      {title}
+      {description ? <Hint text={description} label={"About " + title} /> : null}
+    </span>
+  );
+  const hint = inlineHint ? <span className="field-hint">{inlineHint}</span> : null;
 
   if (prop.type === "boolean") {
     return (
-      <label className="switch-card">
-        <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
-        <div>
-          <div>{title}</div>
-          {hint}
-        </div>
+      <label>
+        {titleNode}
+        <span className="check-field">
+          <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+          <span>Enabled</span>
+        </span>
+        {hint}
       </label>
     );
   }
@@ -193,8 +247,7 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
     const labels = Array.isArray(prop.enum_labels) ? prop.enum_labels : prop.enum;
     return (
       <label>
-        {title}
-        {hint}
+        {titleNode}
         <select value={value == null ? "" : String(value)} onChange={(event) => onChange(event.target.value)}>
           {prop.enum.map((option, index) => (
             <option key={String(option)} value={String(option)}>
@@ -202,6 +255,7 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
             </option>
           ))}
         </select>
+        {hint}
       </label>
     );
   }
@@ -209,8 +263,7 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
   if (prop.type === "integer" || prop.type === "number") {
     return (
       <label>
-        {title}
-        {hint}
+        {titleNode}
         <input
           type="number"
           value={value == null ? "" : value}
@@ -220,6 +273,7 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
           required={required}
           onChange={(event) => onChange(event.target.value)}
         />
+        {hint}
       </label>
     );
   }
@@ -227,8 +281,7 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
   if (prop.type === "array" || prop.type === "object") {
     return (
       <label>
-        {title}
-        {hint}
+        {titleNode}
         <textarea
           rows="6"
           className="mono text-xs"
@@ -236,6 +289,7 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
           required={required}
           onChange={(event) => onChange(event.target.value)}
         />
+        {hint}
       </label>
     );
   }
@@ -243,7 +297,6 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
   return (
     <label>
       {title}
-      {hint}
       <input
         type={prop.format === "secret" ? "password" : "text"}
         value={value == null ? "" : String(value)}
@@ -251,6 +304,7 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
         required={required && !secretSet}
         onChange={(event) => onChange(event.target.value)}
       />
+      {hint}
     </label>
   );
 }

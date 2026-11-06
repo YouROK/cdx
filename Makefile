@@ -53,7 +53,7 @@ test: guard-root
 
 test-live: guard-root
 	@test -n "$(CDX_LIVE_API_KEY)" || { echo "CDX_LIVE_API_KEY is not set"; exit 1; }
-	go test -tags live -v -timeout 180s ./test/live/
+	go test -tags live -v -timeout 300s ./test/live/
 
 vet: guard-root
 	go vet ./...
@@ -63,7 +63,7 @@ fmt:
 	gofmt -w cmd internal test
 
 clean:
-	rm -rf bin dist plugins/webui/web/dist plugins/providers/web/dist plugins/presets/web/dist
+	rm -rf bin dist plugins/webui/web/dist plugins/providers/web/dist plugins/presets/web/dist plugins/permissions/web/dist
 
 install:
 	@test -x "$(BIN)" || { \

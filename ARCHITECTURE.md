@@ -88,6 +88,7 @@ The bus connects the core and all plugins without coupling them together. It sup
   * **Static asset directories**: `cdx.http.static(prefix, dir)` - serves frontend scripts, HTML, CSS, or icons from the plugin's folder.
   * **UI registration**: `cdx.ui.register({ title, icon, order, schema, entry, ui_api, config_url, styles })` - registers a declarative JSON Schema panel or a custom ESM page panel. Page panels are mounted into a shadow-root container and versioned with `ui_api`. Schema panels use the generic plugin settings endpoint unless `config_url` points at a plugin-owned endpoint.
 * All routes and middleware registered by a plugin can be dynamically reassigned or torn down cleanly if a plugin is reloaded or stopped.
+* The core does not authenticate API calls itself: the `auth` plugin registers middleware on `/api`, so every core and plugin endpoint is covered by the same check while that plugin is enabled.
 
 ### 3.5. JSON Schema Engine (`internal/schema`)
 * Validates tool inputs and declarative plugin settings against standard JSON Schema (`type: "object"`).
@@ -109,12 +110,13 @@ The bus connects the core and all plugins without coupling them together. It sup
   * `cdx.providers` - register as an LLM provider (`listModels` callback, `complete` streaming handler). The core only queries which models the provider exposes and delegates chat completion turns to it.
   * `cdx.hooks` - register lifecycle interceptors (`on(hookName, priority, handler)`).
   * `cdx.bus` - publish events and send RPC requests.
-  * `cdx.sys` - low-level host capabilities (HTTP fetch/streaming, file I/O, process execution).
+  * `cdx.sys` - low-level host capabilities (HTTP fetch/streaming, file I/O, cryptographic random bytes, process execution).
 
 ### 3.7. Session Orchestrator (`internal/session`)
 * Manages conversation sessions and message history in `bbolt`.
 * Binds every session to a working directory and resolves the active session like Git: the nearest session in the current directory or its parents wins. An explicit session in a child directory shadows the parent session without affecting it.
-* Enforces a per-turn tool-step budget from core settings (default `40`). When the budget is exhausted without a final answer, the interactive client is asked whether to continue with another equal budget; the prompt can be disabled with the `ask_on_max_steps` setting. The stop reason is stored on the session and returned to the client.
+* Enforces a per-turn tool-step budget from core settings (default `40`, range `1`-`200`). The `step_limit_mode` setting decides what happens when the budget is exhausted: `none` runs the turn without a limit, `ask` (default) asks the interactive client whether to continue with another equal budget, and `stop` ends the turn. The settings are re-read at that point, so a change made during the turn applies to it. The stop reason is stored on the session and returned to the client.
+* Writes the prompt and every finished step to the store, so an interrupted turn keeps its prompt, answers, and tool results; a tool call left without a result is dropped when the session is loaded.
 * Supports two session kinds:
   1. **Temporary (`temp`, default)**: Automatically created in the working directory when no session is active. Expires after a configurable TTL (default: `24h` since last activity).
   2. **Persistent (`persistent`)**: Never expires automatically. Created with `cdx session new`, or by switching the active session with `cdx session mode persistent`.
@@ -139,17 +141,18 @@ The bus connects the core and all plugins without coupling them together. It sup
 
 Default plugins live in `plugins/` and are installed into the plugin directory via `make install`:
 
-1. **`plugins/webui`**: Registers `/` on the core HTTP router to serve the React web application shell. Queries the core for registered plugin UI panels, renders JSON Schema forms itself, and mounts custom page panels as isolated shadow-root modules. The shell serves the shared React runtime through an import map so compiled plugin panels use one React instance.
-2. **`plugins/providers`**:
+1. **`plugins/auth`**: Generates the API token into its encrypted secrets and guards every `/api` route as middleware: requests need the `X-CDX-Token` header and a local `Host`, which blocks DNS rebinding. Serves the token to the dashboard over the bus (`auth:token`) and exposes the `API access` settings page. Loaded first (`order: 1`), because the other plugins register endpoints behind it.
+2. **`plugins/webui`**: Registers `/` on the core HTTP router to serve the React web application shell. Embeds the API token from the `auth` plugin into the page, serves only the built assets from `web/dist`, and re-reads `index.html` on every request so a rebuild needs only a reload. Queries the core for registered plugin UI panels, renders JSON Schema forms itself, and mounts custom page panels as isolated shadow-root modules. The shell serves the shared React runtime through an import map so compiled plugin panels use one React instance.
+3. **`plugins/providers`**:
    * Owns provider connections, model lists, parameters (`temperature`, `context_window`, `max_tokens`, `reasoning`), and model discovery.
    * Saves configurations in its `cdx.storage` and API keys in its `cdx.secrets`.
    * Exposes its own React page panel and HTTP endpoints on the core router.
    * Registers available models with the core via `cdx.providers`.
-3. **`plugins/presets`**:
+4. **`plugins/presets`**:
    * Manages built-in (`standard`, `mini`, `creator`) and custom agent presets.
    * Replaces `{{workspace}}` and `{{max_iterations}}` in preset prompts from the active session and step budget.
    * Dynamically embeds the live Plugin API Reference (`cdx.apiDoc()`, generated from `internal/plugin/doc.go`) into the `creator` preset.
    * Sets the base system prompt in `session:before_turn` (priority `5`) and exposes the `Agent presets` page in the Web UI as a React page panel.
-4. **`plugins/permissions`**: Intercepts `tool:before_call`, checks stored rules (`allow`, `ask`, `deny`) in its storage, supports `once`, `session`, `daemon`, `always`, and `deny` choices, and exposes its rule management as a declarative schema panel.
-5. **`plugins/context`**: Appends `AGENTS.md`, conversation summary, and the `Environment` / `Tools` block in `session:before_turn` (priority `10`), compacts history when approaching message limits, and exposes its settings as a declarative schema panel.
-6. **`plugins/tools-local`**: Provides filesystem and shell tools (`read_file`, `write_file`, `edit_file`, `list_dir`, `shell`) to the model.
+5. **`plugins/permissions`**: Intercepts `tool:before_call`, checks stored rules (`allow`, `ask`, `deny`) in its storage, supports `once`, `session`, `daemon`, `always`, and `deny` choices, and exposes its policies, remembered grants, and grant reset as a React page panel. Actions that leave the working folder are governed by a separate `outside_policy` (`ask`, `allow`, `deny`). Prompts describe the action in full (`title` plus labelled `details`) so the client shows the exact command, file, or folder instead of a clipped summary.
+6. **`plugins/context`**: Appends `AGENTS.md`, conversation summary, and the `Environment` / `Tools` block in `session:before_turn` (priority `10`), compacts history when approaching message limits, and exposes its settings as a declarative schema panel. The summary is capped (`max_summary_chars`, default 8000), keeps its newest part, and each dropped message is summarized once per session (a per-session counter in the plugin storage): every turn passes the whole history, so re-summarizing it would grow the summary past the model context window.
+7. **`plugins/tools-local`**: Provides filesystem and shell tools (`read_file`, `write_file`, `edit_file`, `list_dir`, `shell`) to the model.

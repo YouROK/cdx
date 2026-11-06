@@ -10,12 +10,16 @@ function setup(cdx) {
         read_policy: "allow",
         edit_policy: "ask",
         dangerous_policy: "ask",
+        outside_policy: "ask",
         tool_rules: {}
       };
       cdx.storage.set("config", cfg);
     }
     if (!cfg.tool_rules) {
       cfg.tool_rules = {};
+    }
+    if (!cfg.outside_policy) {
+      cfg.outside_policy = "ask";
     }
     return cfg;
   }
@@ -54,6 +58,53 @@ function setup(cdx) {
     } catch (e) {
       return tool;
     }
+  }
+
+  // Human-readable name of the action behind a tool.
+  function toolTitle(tool) {
+    if (tool === "shell") return "Run a shell command";
+    if (tool === "write_file") return "Write a file";
+    if (tool === "edit_file") return "Edit a file";
+    if (tool === "read_file") return "Read a file";
+    if (tool === "list_dir") return "List a folder";
+    if (tool === "grep") return "Search file contents";
+    if (tool === "glob") return "Find files";
+    return "Use the tool " + tool;
+  }
+
+  // Labelled lines shown in the prompt: the full command, the file path, and so on.
+  function toolDetails(tool, args) {
+    var details = [];
+    function add(label, value) {
+      if (value === undefined || value === null) return;
+      var text = String(value);
+      if (!text) return;
+      details.push({ label: label, value: text });
+    }
+    args = args || {};
+    if (tool === "shell") {
+      add("Command", args.command);
+    } else if (tool === "write_file" || tool === "edit_file") {
+      add("File", args.path || args.file);
+      if (tool === "write_file" && typeof args.content === "string") {
+        add("Content", args.content.length + " characters");
+      }
+    } else if (tool === "read_file") {
+      add("File", args.path || args.file);
+    } else if (tool === "list_dir") {
+      add("Folder", args.path || args.dir);
+    } else if (tool === "grep" || tool === "glob") {
+      add("Pattern", args.pattern || args.query || args.glob);
+      add("Folder", args.path);
+    }
+    if (details.length === 0) {
+      try {
+        add("Arguments", JSON.stringify(args));
+      } catch (e) {
+        // Arguments that cannot be serialized stay out of the prompt.
+      }
+    }
+    return details;
   }
 
   function normalizePath(workdir, p) {
@@ -144,10 +195,17 @@ function setup(cdx) {
 
   function askOutsideWorkspace(tool, payload, outside) {
     var workdir = payload.workdir || "";
-    var summary = "outside workspace: " + tool + " " + outside.join(", ");
-    if (workdir) summary += " (workspace: " + workdir + ")";
+    var details = toolDetails(tool, payload.arguments || {});
+    if (workdir) details.push({ label: "Working folder", value: workdir });
+    for (var i = 0; i < outside.length; i++) {
+      details.push({ label: i === 0 ? "Outside" : "", value: outside[i] });
+    }
+    var summary = "outside the working folder: " + buildSummary(tool, payload.arguments || {});
     var ans = cdx.bus.request("client:prompt_user", {
       kind: "outside_workspace",
+      reason: "outside",
+      title: toolTitle(tool) + " outside the working folder",
+      details: details,
       summary: summary,
       question: summary,
       tool: tool,
@@ -186,7 +244,13 @@ function setup(cdx) {
       }
     }
     if (outside.length > 0) {
-      return askOutsideWorkspace(tool, payload, outside);
+      var outsidePolicy = getConfig().outside_policy || "ask";
+      if (outsidePolicy === "deny") {
+        throw new Error("permission denied by policy: the action is outside the working folder: " + buildSummary(tool, args));
+      }
+      if (outsidePolicy !== "allow") {
+        return askOutsideWorkspace(tool, payload, outside);
+      }
     }
 
     if (policy === "allow") {
@@ -195,6 +259,10 @@ function setup(cdx) {
 
     var summary = buildSummary(tool, args);
     var ans = cdx.bus.request("client:prompt_user", {
+      kind: "permission",
+      reason: "policy",
+      title: toolTitle(tool),
+      details: toolDetails(tool, args),
       summary: summary,
       question: summary,
       tool: tool,
@@ -245,6 +313,7 @@ function setup(cdx) {
       read_policy: cfg.read_policy,
       edit_policy: cfg.edit_policy,
       dangerous_policy: cfg.dangerous_policy,
+      outside_policy: cfg.outside_policy || "ask",
       tool_rules: cfg.tool_rules,
       daemon_grants: daemonGrants,
       session_grants: sessionGrants
@@ -257,6 +326,9 @@ function setup(cdx) {
     if (body.read_policy) cfg.read_policy = body.read_policy;
     if (body.edit_policy) cfg.edit_policy = body.edit_policy;
     if (body.dangerous_policy) cfg.dangerous_policy = body.dangerous_policy;
+    if (body.outside_policy === "ask" || body.outside_policy === "allow" || body.outside_policy === "deny") {
+      cfg.outside_policy = body.outside_policy;
+    }
     if (body.tool_rules) cfg.tool_rules = body.tool_rules;
     cdx.storage.set("config", cfg);
     ctx.json(200, cfg);
@@ -271,35 +343,12 @@ function setup(cdx) {
     ctx.json(200, { reset: true });
   });
 
+  cdx.http.static("/ui/permissions", "./web");
+
   cdx.ui.register({
     title: "Permissions",
     description: "Control how read, edit, and dangerous tools are approved",
     order: 20,
-    config_url: "/api/plugins/permissions/config",
-    schema: {
-      type: "object",
-      title: "Permission Policies",
-      properties: {
-        read_policy: {
-          type: "string",
-          title: "Read Tools Policy",
-          enum: ["allow", "ask", "deny"],
-          default: "allow"
-        },
-        edit_policy: {
-          type: "string",
-          title: "Edit Tools Policy",
-          enum: ["allow", "ask", "deny"],
-          enum_labels: ["allow", "ask", "deny"],
-          default: "ask"
-        },
-        dangerous_policy: {
-          type: "string",
-          title: "Dangerous Tools Policy",
-          enum: ["allow", "ask", "deny"],
-          default: "ask"
-        }
-      }
-    }
+    entry: "/ui/permissions/dist/panel.js"
   });
 }

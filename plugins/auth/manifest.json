@@ -1,0 +1,8 @@
+{
+  "id": "auth",
+  "name": "API access",
+  "version": "1.0.0",
+  "description": "Protects the HTTP API with a token and rejects requests whose host is not local",
+  "entry": "main.js",
+  "order": 1
+}

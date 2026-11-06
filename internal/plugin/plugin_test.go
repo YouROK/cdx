@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -629,10 +630,25 @@ func TestPermissionsAskOutsideWorkspace(t *testing.T) {
 	prompts := 0
 	var lastOptions []string
 	var lastSummary string
+	var lastTitle string
+	var lastFields []string
 	eb.Handle("test", "client:prompt_user", func(_ context.Context, payload any) (any, error) {
 		prompts++
 		m, _ := payload.(map[string]any)
 		lastSummary, _ = m["summary"].(string)
+		lastTitle, _ = m["title"].(string)
+		lastFields = nil
+		if fields, ok := m["details"].([]any); ok {
+			for _, raw := range fields {
+				field, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				label, _ := field["label"].(string)
+				value, _ := field["value"].(string)
+				lastFields = append(lastFields, label+"="+value)
+			}
+		}
 		lastOptions = nil
 		switch opts := m["options"].(type) {
 		case []string:
@@ -661,8 +677,18 @@ func TestPermissionsAskOutsideWorkspace(t *testing.T) {
 	if err == nil {
 		t.Fatal("outside read must be denied when the user denies the prompt")
 	}
-	if prompts != 1 || !strings.Contains(lastSummary, "outside workspace") {
+	if prompts != 1 || !strings.Contains(lastSummary, "outside the working folder") {
 		t.Fatalf("unexpected outside prompt: prompts=%d summary=%q", prompts, lastSummary)
+	}
+	if lastTitle != "Read a file outside the working folder" {
+		t.Fatalf("unexpected outside prompt title: %q", lastTitle)
+	}
+	joined := strings.Join(lastFields, " ")
+	if !strings.Contains(joined, "File=/etc/passwd") || !strings.Contains(joined, "Outside=/etc/passwd") {
+		t.Fatalf("the prompt must show the file and the outside path: %v", lastFields)
+	}
+	if !strings.Contains(joined, "Working folder=/work") {
+		t.Fatalf("the prompt must show the working folder: %v", lastFields)
 	}
 	if strings.Join(lastOptions, ",") != "once,deny" {
 		t.Fatalf("outside prompt must not offer remembered grants: %v", lastOptions)
@@ -701,8 +727,11 @@ func TestPermissionsAskOutsideWorkspace(t *testing.T) {
 	if err == nil {
 		t.Fatal("outside shell must be denied when the user denies the prompt")
 	}
-	if prompts != 2 || !strings.Contains(lastSummary, "outside workspace") {
+	if prompts != 2 || !strings.Contains(lastSummary, "outside the working folder") {
 		t.Fatalf("unexpected shell prompt: prompts=%d summary=%q", prompts, lastSummary)
+	}
+	if !strings.Contains(strings.Join(lastFields, " "), "Command=rm -rf /") {
+		t.Fatalf("the shell prompt must show the full command: %v", lastFields)
 	}
 
 	err = runHook(map[string]any{
@@ -716,6 +745,73 @@ func TestPermissionsAskOutsideWorkspace(t *testing.T) {
 	}
 	if prompts != 3 {
 		t.Fatalf("cd outside workspace must prompt, prompts=%d", prompts)
+	}
+
+	// A plain permission prompt carries the readable action and its arguments.
+	storeConfig := func(overrides map[string]any) {
+		t.Helper()
+		cfg := map[string]any{
+			"read_policy":      "allow",
+			"edit_policy":      "allow",
+			"dangerous_policy": "ask",
+			"outside_policy":   "ask",
+			"tool_rules":       map[string]any{},
+		}
+		for key, value := range overrides {
+			cfg[key] = value
+		}
+		if err := ns.Set("config", cfg); err != nil {
+			t.Fatalf("set permissions config: %v", err)
+		}
+	}
+
+	storeConfig(nil)
+	err = runHook(map[string]any{
+		"tool":       "shell",
+		"permission": "dangerous",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"command": "make test"},
+	})
+	if err == nil {
+		t.Fatal("the dangerous policy must ask and the user denied")
+	}
+	if prompts != 4 || lastTitle != "Run a shell command" {
+		t.Fatalf("unexpected policy prompt: prompts=%d title=%q", prompts, lastTitle)
+	}
+	if strings.Join(lastOptions, ",") != "once,session,daemon,always,deny" {
+		t.Fatalf("policy prompt options are wrong: %v", lastOptions)
+	}
+	if !strings.Contains(strings.Join(lastFields, " "), "Command=make test") {
+		t.Fatalf("the policy prompt must show the command: %v", lastFields)
+	}
+
+	// outside_policy=allow skips the outside prompt; the tool policy still applies.
+	storeConfig(map[string]any{"outside_policy": "allow", "read_policy": "allow"})
+	if err := runHook(map[string]any{
+		"tool":       "read_file",
+		"permission": "read",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"path": "/etc/passwd"},
+	}); err != nil {
+		t.Fatalf("outside read must pass when outside_policy is allow: %v", err)
+	}
+	if prompts != 4 {
+		t.Fatalf("outside_policy=allow must not prompt, prompts=%d", prompts)
+	}
+
+	// outside_policy=deny blocks the action without asking.
+	storeConfig(map[string]any{"outside_policy": "deny"})
+	err = runHook(map[string]any{
+		"tool":       "read_file",
+		"permission": "read",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"path": "/etc/passwd"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside the working folder") {
+		t.Fatalf("outside_policy=deny must block, got %v", err)
+	}
+	if prompts != 4 {
+		t.Fatalf("outside_policy=deny must not prompt, prompts=%d", prompts)
 	}
 }
 
@@ -894,5 +990,234 @@ func TestPluginWorkerVMsKeepControlPlaneResponsive(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("tool handler did not finish")
+	}
+}
+
+func TestBusyPluginAnswersServiceUnavailable(t *testing.T) {
+	tmp := t.TempDir()
+	st, err := store.Open(store.Options{
+		DBPath:        filepath.Join(tmp, "cdx.db"),
+		MasterKeyPath: filepath.Join(tmp, "master.key"),
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	eb := bus.New()
+	rtRouter := router.New()
+	reg := NewRegistry()
+	mgr := NewManager(RuntimeDependencies{
+		Store:    st,
+		Bus:      eb,
+		Router:   rtRouter,
+		Registry: reg,
+		Logger:   logx.New(),
+	})
+	defer mgr.CloseAll()
+
+	pluginsDir := filepath.Join(tmp, "plugins")
+	dir := writePluginFiles(t, pluginsDir, "slow-plugin", `{
+		"id": "slow-plugin",
+		"name": "Slow Plugin",
+		"version": "1.0.0",
+		"description": "Blocks its VM for a while",
+		"entry": "main.js"
+	}`, `
+		function setup(cdx) {
+			cdx.http.get("/api/slow/ping", function(ctx) {
+				ctx.json(200, { ok: true });
+			});
+
+			cdx.http.get("/api/slow/work", function(ctx) {
+				var end = Date.now() + 400;
+				while (Date.now() < end) {}
+				ctx.json(200, { done: true });
+			});
+		}
+	`)
+	if _, err := mgr.LoadPlugin(context.Background(), dir); err != nil {
+		t.Fatalf("load plugin: %v", err)
+	}
+
+	oldTimeout := vmBusyTimeout
+	vmBusyTimeout = 50 * time.Millisecond
+	defer func() { vmBusyTimeout = oldTimeout }()
+
+	srv := httptest.NewServer(rtRouter)
+	defer srv.Close()
+
+	// Occupy the VM, then ask it for something else.
+	workDone := make(chan struct{})
+	go func() {
+		_, _ = http.Get(srv.URL + "/api/slow/work")
+		close(workDone)
+	}()
+	time.Sleep(30 * time.Millisecond)
+
+	resp, err := http.Get(srv.URL + "/api/slow/ping")
+	if err != nil {
+		t.Fatalf("ping failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 while the VM is busy, got %d %s", resp.StatusCode, string(body))
+	}
+	if !strings.Contains(string(body), "is busy") {
+		t.Fatalf("unexpected busy body: %s", string(body))
+	}
+
+	<-workDone
+	time.Sleep(20 * time.Millisecond)
+
+	resp, err = http.Get(srv.URL + "/api/slow/ping")
+	if err != nil {
+		t.Fatalf("ping after work failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 after the VM is free, got %d", resp.StatusCode)
+	}
+}
+
+func TestContextHookCapsTheSummary(t *testing.T) {
+	tmp := t.TempDir()
+	st, err := store.Open(store.Options{
+		DBPath:        filepath.Join(tmp, "cdx.db"),
+		MasterKeyPath: filepath.Join(tmp, "master.key"),
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	eb := bus.New()
+	mgr := NewManager(RuntimeDependencies{
+		Store:    st,
+		Bus:      eb,
+		Router:   router.New(),
+		Registry: NewRegistry(),
+		Logger:   logx.New(),
+	})
+	defer mgr.CloseAll()
+
+	if _, err := mgr.LoadPlugin(context.Background(), filepath.Join("..", "..", "plugins", "context")); err != nil {
+		t.Fatalf("load context plugin: %v", err)
+	}
+
+	messages := make([]map[string]any, 0, 60)
+	for i := 0; i < 60; i++ {
+		messages = append(messages, map[string]any{
+			"role":    "user",
+			"content": fmt.Sprintf("message %d", i),
+		})
+	}
+	payload := map[string]any{
+		"workdir":  tmp,
+		"summary":  strings.Repeat("summarized line\n", 200000),
+		"messages": messages,
+		"tools":    []any{},
+	}
+
+	out, err := eb.RunHook(context.Background(), "session:before_turn", payload)
+	if err != nil {
+		t.Fatalf("hook failed: %v", err)
+	}
+
+	prompt, _ := out["system_prompt"].(string)
+	if len(prompt) > 20000 {
+		t.Fatalf("the summary must be clipped in the system prompt, got %d characters", len(prompt))
+	}
+	summary, _ := out["summary"].(string)
+	if len(summary) > 9000 {
+		t.Fatalf("the stored summary must be capped, got %d characters", len(summary))
+	}
+	if !strings.Contains(summary, "older summary trimmed") {
+		t.Fatalf("the clipped summary must carry a marker: %q", summary[:120])
+	}
+	kept, _ := out["messages"].([]any)
+	if len(kept) != 40 {
+		t.Fatalf("expected 40 kept messages, got %d", len(kept))
+	}
+}
+
+func TestContextHookSummarizesDroppedMessagesOnce(t *testing.T) {
+	tmp := t.TempDir()
+	st, err := store.Open(store.Options{
+		DBPath:        filepath.Join(tmp, "cdx.db"),
+		MasterKeyPath: filepath.Join(tmp, "master.key"),
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	eb := bus.New()
+	mgr := NewManager(RuntimeDependencies{
+		Store:    st,
+		Bus:      eb,
+		Router:   router.New(),
+		Registry: NewRegistry(),
+		Logger:   logx.New(),
+	})
+	defer mgr.CloseAll()
+
+	if _, err := mgr.LoadPlugin(context.Background(), filepath.Join("..", "..", "plugins", "context")); err != nil {
+		t.Fatalf("load context plugin: %v", err)
+	}
+
+	build := func(count int) map[string]any {
+		messages := make([]map[string]any, 0, count)
+		for i := 0; i < count; i++ {
+			messages = append(messages, map[string]any{
+				"role":    "user",
+				"content": fmt.Sprintf("message %d\n", i),
+			})
+		}
+		return map[string]any{
+			"session_id": "ses_test",
+			"workdir":    tmp,
+			"summary":    "",
+			"messages":   messages,
+			"tools":      []any{},
+		}
+	}
+
+	run := func(payload map[string]any) map[string]any {
+		out, err := eb.RunHook(context.Background(), "session:before_turn", payload)
+		if err != nil {
+			t.Fatalf("hook failed: %v", err)
+		}
+		return out
+	}
+
+	payload := build(60)
+	first := run(payload)
+	summary1, _ := first["summary"].(string)
+	if !strings.Contains(summary1, "message 0") {
+		t.Fatalf("the first compaction must summarize the dropped messages: %q", summary1)
+	}
+
+	// The same history must not be summarized again on the next turn; the
+	// session passes its stored summary back.
+	payload = build(60)
+	payload["summary"] = summary1
+	second := run(payload)
+	summary2, _ := second["summary"].(string)
+	if summary2 != summary1 {
+		t.Fatalf("the same history was summarized twice:\nfirst:  %q\nsecond: %q", summary1, summary2)
+	}
+
+	// A longer history summarizes only the new messages.
+	payload = build(80)
+	payload["summary"] = summary2
+	third := run(payload)
+	summary3, _ := third["summary"].(string)
+	if !strings.Contains(summary3, "message 25") {
+		t.Fatalf("new dropped messages must be summarized: %q", summary3)
+	}
+	if count := strings.Count(summary3, "message 0\n"); count != 1 {
+		t.Fatalf("message 0 was summarized %d times: %q", count, summary3)
 	}
 }

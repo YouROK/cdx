@@ -61,6 +61,14 @@ function NumberInput({ value, onChange, placeholder }) {
 }
 
 function Modal({ title, wide, onClose, children }) {
+  useEffect(() => {
+    function onKey(event) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div
       className="modal-backdrop"
@@ -68,10 +76,10 @@ function Modal({ title, wide, onClose, children }) {
         if (event.target.classList.contains("modal-backdrop")) onClose();
       }}
     >
-      <div className={"modal-box" + (wide ? " modal-wide" : "")}>
+      <div className={"modal-box" + (wide ? " modal-wide" : "")} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-header">
           <h4>{title}</h4>
-          <button type="button" className="btn-icon" onClick={onClose}>
+          <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}>
             &times;
           </button>
         </div>
@@ -602,38 +610,41 @@ function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
           </select>
         </label>
         <div className="switch-grid">
-          <label className="switch-card">
-            <input
-              type="checkbox"
-              checked={form.default}
-              onChange={(event) => update("default", event.target.checked)}
-            />
-            <div>
-              <div>Use by default</div>
-              <div className="field-hint">One model is the default for the whole program.</div>
-            </div>
+          <label>
+            Use by default
+            <span className="check-field">
+              <input
+                type="checkbox"
+                checked={form.default}
+                onChange={(event) => update("default", event.target.checked)}
+              />
+              <span>Enabled</span>
+            </span>
+            <span className="field-hint">One model is the default for the whole program.</span>
           </label>
-          <label className="switch-card">
-            <input
-              type="checkbox"
-              checked={form.supports_reasoning_effort}
-              onChange={(event) => update("supports_reasoning_effort", event.target.checked)}
-            />
-            <div>
-              <div>Send reasoning_effort</div>
-              <div className="field-hint">Only when the provider accepts the parameter.</div>
-            </div>
+          <label>
+            Send reasoning_effort
+            <span className="check-field">
+              <input
+                type="checkbox"
+                checked={form.supports_reasoning_effort}
+                onChange={(event) => update("supports_reasoning_effort", event.target.checked)}
+              />
+              <span>Enabled</span>
+            </span>
+            <span className="field-hint">Only when the provider accepts the parameter.</span>
           </label>
-          <label className="switch-card">
-            <input
-              type="checkbox"
-              checked={form.skip_temperature}
-              onChange={(event) => update("skip_temperature", event.target.checked)}
-            />
-            <div>
-              <div>Don't send temperature</div>
-              <div className="field-hint">Needed when the provider rejects the parameter.</div>
-            </div>
+          <label>
+            Don't send temperature
+            <span className="check-field">
+              <input
+                type="checkbox"
+                checked={form.skip_temperature}
+                onChange={(event) => update("skip_temperature", event.target.checked)}
+              />
+              <span>Enabled</span>
+            </span>
+            <span className="field-hint">Needed when the provider rejects the parameter.</span>
           </label>
         </div>
         <div className="modal-actions">

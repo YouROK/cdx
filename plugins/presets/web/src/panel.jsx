@@ -5,6 +5,14 @@ export function mount(container, api) {
 }
 
 function Modal({ title, wide, onClose, children }) {
+  useEffect(() => {
+    function onKey(event) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div
       className="modal-backdrop"
@@ -12,10 +20,10 @@ function Modal({ title, wide, onClose, children }) {
         if (event.target.classList.contains("modal-backdrop")) onClose();
       }}
     >
-      <div className={"modal-box" + (wide ? " modal-wide" : "")}>
+      <div className={"modal-box" + (wide ? " modal-wide" : "")} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-header">
           <h4>{title}</h4>
-          <button type="button" className="btn-icon" onClick={onClose}>
+          <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}>
             &times;
           </button>
         </div>

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { apiFetch } from "./api.js";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { ApiError, apiFetch } from "./api.js";
+import { activeSection, navigate, parseRoute } from "./route.js";
 import { Icon } from "./icons.jsx";
 import { PluginPage } from "./PluginPage.jsx";
 import { GeneralPage } from "./pages/GeneralPage.jsx";
@@ -7,31 +8,46 @@ import { SessionsPage } from "./pages/SessionsPage.jsx";
 import { PluginsPage } from "./pages/PluginsPage.jsx";
 import { LogsPage } from "./pages/LogsPage.jsx";
 
+// Built-in service pages start at this order value; plugin panels with a
+// lower order belong to the first group of the menu.
+const SERVICE_ORDER = 1000;
+
 export function App() {
   const [status, setStatus] = useState(null);
-  const [error, setError] = useState("");
-  const [active, setActive] = useState("general");
+  const [error, setError] = useState(null);
+  const [route, setRoute] = useState(() => parseRoute(window.location.hash));
 
-  async function refreshStatus() {
+  const refreshStatus = useCallback(async () => {
     try {
       const data = await apiFetch("/api/core/status");
       setStatus(data);
-      setError("");
+      setError(null);
     } catch (err) {
-      setError(String(err.message || err));
+      setError(err instanceof Error ? err : new Error(String(err)));
     }
-  }
+  }, []);
 
   useEffect(() => {
     refreshStatus();
+  }, [refreshStatus]);
+
+  useEffect(() => {
+    function onHashChange() {
+      setRoute(parseRoute(window.location.hash));
+    }
+    if (!window.location.hash) {
+      window.history.replaceState(null, "", "#/");
+    }
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   const navItems = useMemo(() => {
     const items = [
-      { id: "general", label: "General", icon: "general", order: 0 },
-      { id: "sessions", label: "Sessions", icon: "sessions", order: 1000 },
-      { id: "plugins", label: "Plugins", icon: "plugins", order: 1010 },
-      { id: "logs", label: "Logs", icon: "logs", order: 1020 }
+      { id: "general", label: "General", icon: "general", order: 0, path: "/" },
+      { id: "sessions", label: "Sessions", icon: "sessions", order: 1000, path: "/sessions" },
+      { id: "plugins", label: "Plugins", icon: "plugins", order: 1010, path: "/plugins" },
+      { id: "logs", label: "Logs", icon: "logs", order: 1020, path: "/logs" }
     ];
     for (const ui of status?.ui || []) {
       items.push({
@@ -39,6 +55,7 @@ export function App() {
         label: ui.title || ui.plugin_id,
         icon: ui.icon || "plugins",
         order: ui.order == null ? 500 : Number(ui.order),
+        path: "/plugin/" + ui.plugin_id,
         ui
       });
     }
@@ -48,25 +65,12 @@ export function App() {
     });
   }, [status]);
 
-  useEffect(() => {
-    if (!navItems.some((item) => item.id === active)) {
-      setActive(navItems[0]?.id || "general");
-    }
-  }, [navItems, active]);
+  const pluginIDs = useMemo(() => (status?.ui || []).map((ui) => ui.plugin_id), [status]);
+  const section = activeSection(route, pluginIDs);
+  const current = navItems.find((item) => item.id === section);
 
   if (error) {
-    return (
-      <div className="app-shell">
-        <main className="main-wrap">
-          <div className="page">
-            <div className="panel error-panel">
-              <h4 className="m-0 mb-xs">cdx is not available</h4>
-              <p className="muted m-0">{error}</p>
-            </div>
-          </div>
-        </main>
-      </div>
-    );
+    return <StartupError error={error} onRetry={refreshStatus} />;
   }
 
   if (!status) {
@@ -80,8 +84,6 @@ export function App() {
       </div>
     );
   }
-
-  const current = navItems.find((item) => item.id === active);
 
   return (
     <div className="app-shell">
@@ -108,26 +110,68 @@ export function App() {
           <h4>cdx</h4>
         </div>
         <nav>
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={"nav-item" + (item.id === active ? " active" : "")}
-              onClick={() => setActive(item.id)}
-            >
-              <Icon name={item.icon} />
-              <span>{item.label}</span>
-            </button>
-          ))}
+          {navItems.map((item, index) => {
+            const previous = navItems[index - 1];
+            const gap = previous && previous.order < SERVICE_ORDER && item.order >= SERVICE_ORDER;
+            return (
+              <Fragment key={item.id}>
+                {gap ? <div className="nav-gap" /> : null}
+                <a
+                  href={"#" + item.path}
+                  className={"nav-item" + (item.id === section ? " active" : "")}
+                  aria-current={item.id === section ? "page" : undefined}
+                >
+                  <Icon name={item.icon} />
+                  <span>{item.label}</span>
+                </a>
+              </Fragment>
+            );
+          })}
         </nav>
       </aside>
       <main className="main-wrap">
         <div className="page">
-          {active === "general" ? <GeneralPage status={status} onRefresh={refreshStatus} /> : null}
-          {active === "sessions" ? <SessionsPage /> : null}
-          {active === "plugins" ? <PluginsPage /> : null}
-          {active === "logs" ? <LogsPage /> : null}
+          {section === "general" ? <GeneralPage status={status} onRefresh={refreshStatus} /> : null}
+          {section === "sessions" ? (
+            <SessionsPage
+              sessionId={route.parts[1] || ""}
+              onOpen={(id) => navigate("/sessions/" + encodeURIComponent(id))}
+              onBack={() => navigate("/sessions")}
+            />
+          ) : null}
+          {section === "plugins" ? <PluginsPage onChanged={refreshStatus} /> : null}
+          {section === "logs" ? <LogsPage /> : null}
           {current?.ui ? <PluginPage key={current.id} descriptor={current.ui} /> : null}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function StartupError({ error, onRetry }) {
+  const unauthorized = error instanceof ApiError && error.status === 401;
+  return (
+    <div className="app-shell">
+      <main className="main-wrap">
+        <div className="page">
+          <div className="panel error-panel">
+            <h4 className="m-0 mb-xs">{unauthorized ? "Access denied" : "cdx is not available"}</h4>
+            <p className="muted m-0">{error.message}</p>
+            {unauthorized ? (
+              <p className="muted mt-2">
+                The page does not carry a valid API token. Open the interface again from the address
+                shown by <span className="mono">cdx daemon status</span>.
+              </p>
+            ) : null}
+            <div className="row-gap-xs mt-3">
+              <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
+                Reload page
+              </button>
+              <button type="button" className="btn btn-default" onClick={onRetry}>
+                Retry
+              </button>
+            </div>
+          </div>
         </div>
       </main>
     </div>

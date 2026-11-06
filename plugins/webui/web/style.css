@@ -90,6 +90,7 @@ body {
   border: none;
   width: 100%;
   text-align: left;
+  text-decoration: none;
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
@@ -265,6 +266,19 @@ label {
   font-size: 12px;
 }
 
+/* A field is its label, its control, and then its hint. Hints never go between
+   the label and the control, so fields in a grid line up even when a hint wraps
+   to several lines. */
+label:not(.checkbox-row):not(.check-field) > input,
+label:not(.checkbox-row):not(.check-field) > select,
+label:not(.checkbox-row):not(.check-field) > textarea {
+  order: 2;
+}
+
+label:not(.checkbox-row):not(.check-field) > .field-hint {
+  order: 3;
+}
+
 .checkbox-row {
   display: flex;
   flex-direction: row;
@@ -286,6 +300,13 @@ textarea {
   padding: 8px 10px;
   font-size: 14px;
   font-family: inherit;
+  width: 100%;
+}
+
+/* Multi-line fields keep a fixed height: a drag handle breaks the layout. */
+textarea {
+  resize: none;
+  min-height: 90px;
 }
 
 input:focus,
@@ -297,6 +318,7 @@ textarea:focus {
 
 .btn {
   display: inline-flex;
+  white-space: nowrap;
   align-items: center;
   justify-content: center;
   height: 34px;
@@ -636,21 +658,28 @@ textarea:focus {
   margin-top: 4px;
 }
 
-.switch-card {
+/* A checkbox control is a field-sized box: same height as a text input, with
+   the checkbox and its label inside. */
+.check-field {
   display: flex;
   flex-direction: row;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
+  align-items: center;
+  gap: 8px;
+  min-height: 37px;
+  padding: 8px 10px;
   background: var(--raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  font-size: 14px;
   cursor: pointer;
 }
 
-.switch-card input[type="checkbox"] {
-  margin-top: 3px;
+.check-field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
   accent-color: var(--accent);
+  cursor: pointer;
 }
 
 @media (max-width: 900px) {
@@ -820,4 +849,105 @@ textarea:focus {
 
 .confirm-box {
   max-width: 440px;
+}
+
+.grant-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.grant-values {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.field-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hint {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.hint-button {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+}
+
+.hint-button:hover,
+.hint-button:focus-visible,
+.hint-button[aria-expanded="true"] {
+  color: var(--accent-text);
+  border-color: var(--accent-line);
+  outline: none;
+}
+
+/* Larger touch target without shifting the layout. */
+.hint-button::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+}
+
+.hint-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: normal;
+  text-align: left;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.prompt-box {
+  width: min(640px, calc(100vw - 32px));
+  max-width: none;
+}
+
+.prompt-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prompt-value {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
 }

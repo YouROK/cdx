@@ -138,6 +138,13 @@ func NewOrchestrator(st *store.Store, eb *bus.Bus, reg *plugin.Registry, logger 
 // DefaultMaxSteps is the default number of model/tool iterations per turn.
 const DefaultMaxSteps = 40
 
+// Step-limit modes stored in the step_limit_mode setting.
+const (
+	StepLimitNone = "none" // The turn runs without a tool-step limit.
+	StepLimitAsk  = "ask"  // The client is asked before extending the budget.
+	StepLimitStop = "stop" // The turn stops at the budget.
+)
+
 // MaxSteps returns the configured tool-step budget or DefaultMaxSteps.
 func (o *Orchestrator) MaxSteps() int {
 	if o.store == nil {
@@ -145,7 +152,7 @@ func (o *Orchestrator) MaxSteps() int {
 	}
 	var steps int
 	found, err := o.store.GetState("max_steps", &steps)
-	if err == nil && found && steps > 0 {
+	if err == nil && found && steps >= 1 && steps <= 200 {
 		return steps
 	}
 	return DefaultMaxSteps
@@ -159,25 +166,41 @@ func (o *Orchestrator) SetMaxSteps(steps int) error {
 	return o.store.PutState("max_steps", steps)
 }
 
-// AskOnMaxSteps reports whether the client is asked before extending the step budget.
-func (o *Orchestrator) AskOnMaxSteps() bool {
+// StepLimitMode returns what happens when a turn exhausts its step budget.
+func (o *Orchestrator) StepLimitMode() string {
 	if o.store == nil {
-		return true
+		return StepLimitAsk
+	}
+	var mode string
+	if found, err := o.store.GetState("step_limit_mode", &mode); err == nil && found {
+		switch mode {
+		case StepLimitNone, StepLimitAsk, StepLimitStop:
+			return mode
+		}
+	}
+	// Settings written before the mode existed: a zero budget meant no limit,
+	// and ask_on_max_steps chose between asking and stopping.
+	var steps int
+	if found, err := o.store.GetState("max_steps", &steps); err == nil && found && steps == 0 {
+		return StepLimitNone
 	}
 	var ask bool
-	found, err := o.store.GetState("ask_on_max_steps", &ask)
-	if err == nil && found {
-		return ask
+	if found, err := o.store.GetState("ask_on_max_steps", &ask); err == nil && found && !ask {
+		return StepLimitStop
 	}
-	return true
+	return StepLimitAsk
 }
 
-// SetAskOnMaxSteps controls whether the client is asked to extend the step budget.
-func (o *Orchestrator) SetAskOnMaxSteps(ask bool) error {
-	return o.store.PutState("ask_on_max_steps", ask)
+// SetStepLimitMode updates what happens when a turn exhausts its step budget.
+func (o *Orchestrator) SetStepLimitMode(mode string) error {
+	switch mode {
+	case StepLimitNone, StepLimitAsk, StepLimitStop:
+		return o.store.PutState("step_limit_mode", mode)
+	}
+	return fmt.Errorf("step limit mode must be none, ask, or stop")
 }
 
-func (o *Orchestrator) askContinue(ctx context.Context, steps, budget int) bool {
+func (o *Orchestrator) askContinue(ctx context.Context, steps, budget, add int) bool {
 	if o.bus == nil {
 		return false
 	}
@@ -185,7 +208,7 @@ func (o *Orchestrator) askContinue(ctx context.Context, steps, budget int) bool 
 		"kind":      "max_steps",
 		"steps":     steps,
 		"max_steps": budget,
-		"add_steps": o.MaxSteps(),
+		"add_steps": add,
 		"question":  fmt.Sprintf("Model made %d requests. Continue?", steps),
 		"options":   []string{"continue", "stop"},
 	})
@@ -590,6 +613,7 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 	if err != nil {
 		return nil, err
 	}
+	history = repairToolCalls(history)
 
 	now := o.nowFn().Unix()
 	history = append(history, Message{
@@ -597,6 +621,25 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 		Content:   req.Prompt,
 		CreatedAt: now,
 	})
+
+	// Persist partial progress, so an interrupted turn keeps what it did.
+	save := func() {
+		if err := o.SaveMessages(sess, history); err != nil {
+			o.log.Warn("Failed to save session messages: %v", err)
+		}
+	}
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		sess.StoppedReason = "error"
+		if ctx.Err() != nil {
+			sess.StoppedReason = "interrupted"
+		}
+		save()
+	}()
+	save()
 
 	modelName := req.Model
 	if modelName == "" {
@@ -611,9 +654,13 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 	if budget <= 0 {
 		budget = o.MaxSteps()
 	}
+	unlimited := o.StepLimitMode() == StepLimitNone
+	if unlimited {
+		budget = 0
+	}
 
 	for {
-		for steps < budget {
+		for unlimited || steps < budget {
 			steps++
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -705,6 +752,7 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 				ToolCalls: compResp.ToolCalls,
 				CreatedAt: o.nowFn().Unix(),
 			})
+			save()
 
 			// If the assistant made no tool calls, the turn is complete.
 			if len(compResp.ToolCalls) == 0 {
@@ -789,6 +837,7 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 					Content:    contentStr,
 					CreatedAt:  o.nowFn().Unix(),
 				})
+				save()
 			}
 		}
 
@@ -798,13 +847,24 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if !o.AskOnMaxSteps() {
+		if unlimited {
 			break
 		}
-		if !o.askContinue(ctx, steps, budget) {
+		// Re-read the settings so a change made during the turn takes effect now.
+		mode := o.StepLimitMode()
+		if mode == StepLimitNone {
+			unlimited = true
+			budget = 0
+			continue
+		}
+		if mode != StepLimitAsk {
 			break
 		}
-		budget += o.MaxSteps()
+		next := o.MaxSteps()
+		if !o.askContinue(ctx, steps, budget, next) {
+			break
+		}
+		budget += next
 	}
 
 	stoppedReason := ""
@@ -817,6 +877,7 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 	if err := o.SaveMessages(sess, history); err != nil {
 		return nil, err
 	}
+	completed = true
 
 	if onEvent != nil {
 		onEvent(TurnEvent{Type: "done", Session: sess, Usage: lastUsage})
@@ -875,6 +936,54 @@ func (o *Orchestrator) buildToolDefs() []map[string]any {
 			"description":  s.Description,
 			"input_schema": s.InputSchema,
 		})
+	}
+	return out
+}
+
+// repairToolCalls drops tool calls and results that an interrupted turn left unanswered.
+func repairToolCalls(msgs []Message) []Message {
+	out := make([]Message, 0, len(msgs))
+	for i := 0; i < len(msgs); {
+		m := msgs[i]
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			out = append(out, m)
+			i++
+			continue
+		}
+		j := i + 1
+		answered := map[string]bool{}
+		for ; j < len(msgs) && msgs[j].Role == "tool"; j++ {
+			if id := msgs[j].ToolCallID; id != "" {
+				answered[id] = true
+			}
+		}
+		calls := make([]map[string]any, 0, len(m.ToolCalls))
+		ids := map[string]bool{}
+		for _, tc := range m.ToolCalls {
+			id, _ := tc["id"].(string)
+			if id != "" && answered[id] {
+				calls = append(calls, tc)
+				ids[id] = true
+			}
+		}
+		if len(calls) == 0 {
+			if strings.TrimSpace(m.Content) == "" && strings.TrimSpace(m.Reasoning) == "" {
+				i = j
+				continue
+			}
+			m.ToolCalls = nil
+			out = append(out, m)
+			i = j
+			continue
+		}
+		m.ToolCalls = calls
+		out = append(out, m)
+		for k := i + 1; k < j; k++ {
+			if ids[msgs[k].ToolCallID] {
+				out = append(out, msgs[k])
+			}
+		}
+		i = j
 	}
 	return out
 }

@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,14 +24,24 @@ import (
 )
 
 type vmCommand struct {
-	fn   func(vm *goja.Runtime) (any, error)
-	resp chan vmResult
+	fn      func(vm *goja.Runtime) (any, error)
+	resp    chan vmResult
+	started chan struct{}
+	expired chan struct{}
 }
 
 type vmResult struct {
 	val any
 	err error
 }
+
+// ErrPluginBusy reports that the plugin VM did not start the call in time.
+var ErrPluginBusy = errors.New("plugin is busy")
+
+// vmBusyTimeout bounds how long a caller waits for a busy plugin VM. Without
+// it an HTTP request would wait until the VM finishes whatever blocks it, for
+// example a permission prompt answered in the terminal.
+var vmBusyTimeout = 5 * time.Second
 
 type runtimeMode int
 
@@ -68,12 +79,12 @@ type RuntimeDependencies struct {
 
 // Runtime manages a single plugin running inside its own dedicated Goja VM goroutine.
 type Runtime struct {
-	manifest       *Manifest
-	dir            string
-	owner          string
-	deps           RuntimeDependencies
-	plainStore     *store.PlainNamespace
-	secretStore    *store.SecretNamespace
+	manifest          *Manifest
+	dir               string
+	owner             string
+	deps              RuntimeDependencies
+	plainStore        *store.PlainNamespace
+	secretStore       *store.SecretNamespace
 	logScope          *logx.Scope
 	settingsSchema    *schema.Schema
 	settingsSchemaRaw map[string]any
@@ -334,6 +345,15 @@ func (rt *Runtime) loop() {
 		case <-rt.done:
 			return
 		case cmd := <-rt.cmds:
+			select {
+			case <-cmd.expired:
+				cmd.resp <- vmResult{err: ErrPluginBusy}
+				continue
+			default:
+			}
+			if cmd.started != nil {
+				close(cmd.started)
+			}
 			val, err := safeRun(vm, cmd.fn)
 			cmd.resp <- vmResult{val: val, err: err}
 		}
@@ -351,6 +371,8 @@ func safeRun(vm *goja.Runtime, fn func(vm *goja.Runtime) (any, error)) (val any,
 
 func (rt *Runtime) execOnVM(ctx context.Context, fn func(vm *goja.Runtime) (any, error)) (any, error) {
 	resp := make(chan vmResult, 1)
+	started := make(chan struct{})
+	expired := make(chan struct{})
 	wrapped := func(vm *goja.Runtime) (any, error) {
 		prev := rt.activeCtx
 		rt.activeCtx = ctx
@@ -362,16 +384,33 @@ func (rt *Runtime) execOnVM(ctx context.Context, fn func(vm *goja.Runtime) (any,
 		return nil, fmt.Errorf("plugin %q is stopped", rt.manifest.ID)
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case rt.cmds <- vmCommand{fn: wrapped, resp: resp}:
+	case rt.cmds <- vmCommand{fn: wrapped, resp: resp, started: started, expired: expired}:
 	}
+
+	timer := time.NewTimer(vmBusyTimeout)
+	defer timer.Stop()
 
 	select {
 	case <-rt.done:
 		return nil, fmt.Errorf("plugin %q stopped during call", rt.manifest.ID)
 	case <-ctx.Done():
+		close(expired)
 		return nil, ctx.Err()
 	case res := <-resp:
 		return res.val, res.err
+	case <-started:
+		// The call is running: wait for it without a queue deadline.
+		select {
+		case <-rt.done:
+			return nil, fmt.Errorf("plugin %q stopped during call", rt.manifest.ID)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case res := <-resp:
+			return res.val, res.err
+		}
+	case <-timer.C:
+		close(expired)
+		return nil, ErrPluginBusy
 	}
 }
 
@@ -753,7 +792,7 @@ func (rt *Runtime) buildHTTPObject(vm *goja.Runtime, groupPrefix string) *goja.O
 				return nil, callErr
 			})
 			if err != nil && !c.Writer.Written() {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				writePluginError(c, rt.manifest.ID, err)
 			}
 		})
 	}
@@ -790,7 +829,7 @@ func (rt *Runtime) buildHTTPObject(vm *goja.Runtime, groupPrefix string) *goja.O
 				return nil, callErr
 			})
 			if err != nil && !c.Writer.Written() {
-				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": pluginErrorMessage(rt.manifest.ID, err)})
 				return
 			}
 			if !c.IsAborted() {
@@ -818,6 +857,22 @@ func (rt *Runtime) buildHTTPObject(vm *goja.Runtime, groupPrefix string) *goja.O
 	return obj
 }
 
+// writePluginError answers a failed plugin handler; a busy VM is a retryable 503.
+func writePluginError(c *gin.Context, pluginID string, err error) {
+	if errors.Is(err, ErrPluginBusy) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": pluginErrorMessage(pluginID, err)})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{"error": pluginErrorMessage(pluginID, err)})
+}
+
+func pluginErrorMessage(pluginID string, err error) string {
+	if errors.Is(err, ErrPluginBusy) {
+		return fmt.Sprintf("plugin %q is busy", pluginID)
+	}
+	return err.Error()
+}
+
 func (rt *Runtime) buildGinContextObject(vm *goja.Runtime, c *gin.Context) *goja.Object {
 	ctxObj := vm.NewObject()
 	_ = ctxObj.Set("method", c.Request.Method)
@@ -825,6 +880,7 @@ func (rt *Runtime) buildGinContextObject(vm *goja.Runtime, c *gin.Context) *goja
 	_ = ctxObj.Set("param", func(name string) string { return c.Param(name) })
 	_ = ctxObj.Set("query", func(name string) string { return c.Query(name) })
 	_ = ctxObj.Set("getHeader", func(name string) string { return c.GetHeader(name) })
+	_ = ctxObj.Set("host", func() string { return c.Request.Host })
 	_ = ctxObj.Set("header", func(k, v string) { c.Header(k, v) })
 	_ = ctxObj.Set("status", func(code int) { c.Status(code) })
 	_ = ctxObj.Set("set", func(k string, v any) { c.Set(k, v) })
@@ -1123,6 +1179,13 @@ func (rt *Runtime) buildSysObject(vm *goja.Runtime) *goja.Object {
 			panic(vm.NewGoError(err))
 		}
 		return list
+	})
+	_ = obj.Set("random", func(n int) string {
+		hex, err := rt.deps.Sys.RandomHex(n)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return hex
 	})
 	_ = obj.Set("exec", func(command string, workdir string, timeoutMS int) map[string]any {
 		ctx := rt.currentCtx()

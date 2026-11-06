@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 export default defineConfig({
   root: import.meta.dirname,
-  base: "/ui/webui/dist/",
+  base: "/ui/webui/",
   plugins: [react()],
   build: {
     outDir: "dist",

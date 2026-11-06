@@ -85,3 +85,42 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Migrate the Providers & Models and Agent presets panels to React.
 - [x] Move Permissions and Context settings to declarative schema panels.
 - [x] Add the Vite build pipeline and wire it into `make build`.
+
+## Stage 11: Web UI Parity and Access Control
+- [x] Guard every `/api` route with a token owned by the `auth` plugin, stored in its encrypted secrets.
+- [x] Reject API requests whose `Host` header is not local, to block DNS rebinding.
+- [x] Embed the token into the served page from the `webui` plugin, so no token is kept in the URL.
+- [x] Serve only the built assets from `web/dist` and re-read `index.html` on every request.
+- [x] Add hash routing with deep links and grouped menu sections.
+- [x] Refresh the menu after plugin install, enable, and remove; recover from a failed settings load.
+- [x] Show remembered permission grants and reset them from the Permissions page.
+- [x] Add frontend unit tests (`npm test`) and a watch build (`npm run dev`).
+
+## Stage 12: Permission Prompt UX
+- [x] Show the full action in permission prompts, wrapped to the terminal width instead of clipped.
+- [x] Describe outside-folder actions with the working folder, the outside path, and the full command or file.
+- [x] Accept Enter for the default answer (`once`) and show `once`/`deny` as `Y/n` when only those two are offered.
+- [x] Add an outside-folder policy (`ask`, `allow`, `deny`) with a note that it is not a sandbox.
+- [x] Add "?" hints with the full explanation to the settings pages; the popover opens on click for touch screens.
+
+## Stage 13: Runtime Feedback
+- [x] Flatten progress labels to one line, so a command with line breaks no longer leaves stale spinner lines.
+- [x] Ring the bell for every interactive question, including the step-budget prompt.
+- [x] Shorten the end-of-turn summary to duration, steps, tokens, and changed files; drop the tool-error section.
+- [x] Answer a busy plugin VM with `503` instead of hanging, so a page does not freeze while a prompt waits in the terminal.
+- [x] Retry busy settings pages automatically once the plugin is free again.
+- [x] Replace the ask-on-limit checkbox with a step-limit mode (no limit, ask, stop) and keep the budget between 1 and 200.
+
+## Stage 14: Plugin Authoring Mode
+- [x] Rewrite the creator preset with the Goja runtime limits, the HTTP and panel contracts, and a plain-DOM panel skeleton.
+- [x] Align panel form controls with the dashboard: full-width fields and fixed-height textareas.
+- [x] Give every field the same order - title above, control, hint below - including checkboxes; long explanations move behind the question mark. State the rule in the creator prompt and PLUGINS.md.
+- [x] Add a live creator test that builds a minimal plugin with a tool and a panel, then loads it and checks both.
+- [x] Make `.check-field` work on a label (`flex-direction: row`, checkbox first) and document `.checkbox-row`.
+- [x] Describe the HTTP handler context (`ctx.bindJSON` and friends) in the generated API reference so the creator reads request bodies correctly.
+
+## Stage 15: Context Budget
+- [x] Cap the conversation summary with `max_summary_chars` (default 8000), keeping its newest part and a trim marker.
+- [x] Clip an oversized summary on read, so a session with a bloated summary recovers on the next turn.
+- [x] Expose the summary limit in the Context & Memory settings.
+- [x] Summarize dropped messages only once per session, so each turn no longer re-appends the whole dropped history.

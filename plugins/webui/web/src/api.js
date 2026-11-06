@@ -1,5 +1,24 @@
+// The token is embedded into the page by the webui plugin, so every request
+// carries it and the API can stay closed to other origins.
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+export function apiToken() {
+  if (typeof window === "undefined") return "";
+  const token = window.__CDX_TOKEN__;
+  return typeof token === "string" ? token : "";
+}
+
 export async function apiFetch(url, options) {
-  const res = await fetch(url, options);
+  const headers = new Headers(options?.headers || {});
+  const token = apiToken();
+  if (token) headers.set("X-CDX-Token", token);
+  const res = await fetch(url, { ...options, headers });
   const text = await res.text();
   let data = {};
   if (text) {
@@ -10,7 +29,7 @@ export async function apiFetch(url, options) {
     }
   }
   if (!res.ok) {
-    throw new Error(data.error || "HTTP " + res.status);
+    throw new ApiError(data.error || data.message || "HTTP " + res.status, res.status);
   }
   return data;
 }

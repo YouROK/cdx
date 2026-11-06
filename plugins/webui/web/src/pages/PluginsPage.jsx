@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { apiFetch, postJSON } from "../api.js";
 import { useUI } from "../ui.jsx";
 
-export function PluginsPage() {
+export function PluginsPage({ onChanged }) {
   const { toast, confirm } = useUI();
   const [plugins, setPlugins] = useState([]);
   const [url, setUrl] = useState("");
@@ -32,6 +32,7 @@ export function PluginsPage() {
       toast("Installed " + data.plugin.name + " v" + data.plugin.version);
       setUrl("");
       await loadPlugins();
+      onChanged?.();
     } catch (err) {
       toast(String(err.message || err), false);
     } finally {
@@ -47,6 +48,7 @@ export function PluginsPage() {
       );
       toast(plugin.id + (plugin.enabled ? " disabled" : " enabled"));
       await loadPlugins();
+      onChanged?.();
     } catch (err) {
       toast(String(err.message || err), false);
     }
@@ -59,6 +61,7 @@ export function PluginsPage() {
       await apiFetch("/api/core/plugins/" + encodeURIComponent(plugin.id), { method: "DELETE" });
       toast("Plugin " + plugin.id + " removed");
       await loadPlugins();
+      onChanged?.();
     } catch (err) {
       toast(String(err.message || err), false);
     }

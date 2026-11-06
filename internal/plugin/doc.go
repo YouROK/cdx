@@ -31,10 +31,21 @@ var DocCDXObject = []DocEntry{
 	{Signature: "cdx.providers.register({ listModels, complete }) / listModels()", Summary: "Register as an LLM provider; listModels returns available models, complete(req, emit) runs turns; wrap complete with cdx.inWorker to use a worker VM"},
 	{Signature: "cdx.hooks.on(hookName, priority, handler) / run(hookName, payload)", Summary: "Intercept lifecycle pipelines: session:before_turn, tool:before_call, tool:after_call"},
 	{Signature: "cdx.bus.publish|subscribe|handle|request(topic, payload)", Summary: "Communicate across plugins and core via events and 1-to-1 RPC (e.g. client:prompt_user)"},
-	{Signature: "cdx.http.handle|get|post|put|delete|patch|use|group|static()", Summary: "Register HTTP endpoints, Gin middleware (ctx.next, ctx.abortWithJSON, ctx.set/get), and static assets"},
+	{Signature: "cdx.http.handle|get|post|put|delete|patch|use|group|static()", Summary: "Register HTTP endpoints, Gin middleware (ctx.bindJSON, ctx.next, ctx.abortWithJSON, ctx.set/get), and static assets"},
 	{Signature: "cdx.ui.register({ title, description, order, schema, config_url, entry, ui_api, styles }) / list()", Summary: "Register a declarative JSON Schema panel or a versioned ESM page panel mounted in an isolated shadow root"},
 	{Signature: "cdx.plugins.list|installZip|setEnabled|remove()", Summary: "Inspect, install from .zip URL, enable/disable, or remove plugins"},
-	{Signature: "cdx.sys.readFile|writeFile|stat|readDir|exec|fetch()", Summary: "Low-level OS capabilities: filesystem I/O, shell execution, and HTTP/SSE streaming fetch"},
+	{Signature: "cdx.sys.readFile|writeFile|stat|readDir|random|exec|fetch()", Summary: "Low-level OS capabilities: filesystem I/O, cryptographic random bytes, shell execution, and HTTP/SSE streaming fetch"},
+}
+
+// DocHTTPContext lists what a cdx.http handler receives as its context object.
+var DocHTTPContext = []DocEntry{
+	{Signature: "ctx.method / ctx.path / ctx.host()", Summary: "Request method, path, and the Host header"},
+	{Signature: "ctx.param(name) / ctx.query(name) / ctx.getHeader(name)", Summary: "Path parameter, query parameter, and request header"},
+	{Signature: "ctx.bindJSON()", Summary: "Parsed JSON request body as an object; an empty object when the body is empty. Read bodies through it, not with ctx.body"},
+	{Signature: "ctx.body()", Summary: "Raw request body string, for a body that is not JSON"},
+	{Signature: "ctx.json(code, value) / ctx.status(code) / ctx.string(code, text) / ctx.html(code, html) / ctx.header(name, value)", Summary: "Write the response: JSON payload, bare status, text, HTML, or a response header"},
+	{Signature: "ctx.abortWithJSON(code, value) / ctx.next()", Summary: "Middleware control: stop the chain with a JSON response, or continue to the next handler"},
+	{Signature: "ctx.set(key, value) / ctx.get(key)", Summary: "Per-request values shared between middleware and handlers"},
 }
 
 // DocPermissionLevels lists the tool permission levels.
@@ -73,6 +84,9 @@ func RenderAPIDoc() string {
 
 	sb.WriteString("\n### The `cdx` host object\n")
 	writeDocEntries(&sb, DocCDXObject)
+
+	sb.WriteString("\n### HTTP handler context (`cdx.http`)\n")
+	writeDocEntries(&sb, DocHTTPContext)
 
 	sb.WriteString("\n### Tool permission levels\n")
 	writeDocEntries(&sb, DocPermissionLevels)

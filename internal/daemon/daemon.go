@@ -328,19 +328,25 @@ func (d *Daemon) registerCoreRoutes() {
 
 	d.router.Handle("core", "GET", "/api/core/agent", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"max_steps":        d.sessions.MaxSteps(),
-			"ask_on_max_steps": d.sessions.AskOnMaxSteps(),
+			"max_steps":       d.sessions.MaxSteps(),
+			"step_limit_mode": d.sessions.StepLimitMode(),
 		})
 	})
 
 	d.router.Handle("core", "POST", "/api/core/agent", func(c *gin.Context) {
 		var body struct {
-			MaxSteps      *int  `json:"max_steps"`
-			AskOnMaxSteps *bool `json:"ask_on_max_steps"`
+			MaxSteps      *int    `json:"max_steps"`
+			StepLimitMode *string `json:"step_limit_mode"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
+		}
+		if body.StepLimitMode != nil {
+			if err := d.sessions.SetStepLimitMode(*body.StepLimitMode); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		if body.MaxSteps != nil {
 			if err := d.sessions.SetMaxSteps(*body.MaxSteps); err != nil {
@@ -348,15 +354,9 @@ func (d *Daemon) registerCoreRoutes() {
 				return
 			}
 		}
-		if body.AskOnMaxSteps != nil {
-			if err := d.sessions.SetAskOnMaxSteps(*body.AskOnMaxSteps); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-		}
 		c.JSON(http.StatusOK, gin.H{
-			"max_steps":        d.sessions.MaxSteps(),
-			"ask_on_max_steps": d.sessions.AskOnMaxSteps(),
+			"max_steps":       d.sessions.MaxSteps(),
+			"step_limit_mode": d.sessions.StepLimitMode(),
 		})
 	})
 
@@ -524,24 +524,24 @@ func (d *Daemon) handleIPC(ctx context.Context, method string, payload map[strin
 
 	case "agent.settings":
 		return map[string]any{
-			"max_steps":        d.sessions.MaxSteps(),
-			"ask_on_max_steps": d.sessions.AskOnMaxSteps(),
+			"max_steps":       d.sessions.MaxSteps(),
+			"step_limit_mode": d.sessions.StepLimitMode(),
 		}, nil
 
 	case "agent.settings.save":
+		if v, ok := payload["step_limit_mode"].(string); ok {
+			if err := d.sessions.SetStepLimitMode(v); err != nil {
+				return nil, err
+			}
+		}
 		if v, ok := payload["max_steps"].(float64); ok {
 			if err := d.sessions.SetMaxSteps(int(v)); err != nil {
 				return nil, err
 			}
 		}
-		if v, ok := payload["ask_on_max_steps"].(bool); ok {
-			if err := d.sessions.SetAskOnMaxSteps(v); err != nil {
-				return nil, err
-			}
-		}
 		return map[string]any{
-			"max_steps":        d.sessions.MaxSteps(),
-			"ask_on_max_steps": d.sessions.AskOnMaxSteps(),
+			"max_steps":       d.sessions.MaxSteps(),
+			"step_limit_mode": d.sessions.StepLimitMode(),
 		}, nil
 
 	case "turn.run":

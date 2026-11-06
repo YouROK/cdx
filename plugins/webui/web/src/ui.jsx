@@ -53,10 +53,10 @@ export function UIProvider({ children }) {
             if (event.target.classList.contains("modal-backdrop")) settle(false);
           }}
         >
-          <div className="modal-box confirm-box">
+          <div className="modal-box confirm-box" role="dialog" aria-modal="true" aria-label={confirmState.title}>
             <div className="modal-header">
               <h4>{confirmState.title}</h4>
-              <button type="button" className="btn-icon" onClick={() => settle(false)}>
+              <button type="button" className="btn-icon" aria-label="Close" onClick={() => settle(false)}>
                 &times;
               </button>
             </div>

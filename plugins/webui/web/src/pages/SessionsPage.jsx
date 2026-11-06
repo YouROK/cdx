@@ -2,20 +2,22 @@ import { useEffect, useState } from "react";
 import { apiFetch, postJSON } from "../api.js";
 import { useUI } from "../ui.jsx";
 
-export function SessionsPage() {
+export function SessionsPage({ sessionId, onOpen, onBack }) {
   const { toast, confirm } = useUI();
   const [data, setData] = useState({ sessions: [], temp_ttl_hours: 24 });
-  const [selected, setSelected] = useState(null);
+  const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   async function loadSessions() {
     setLoading(true);
     try {
       const next = await apiFetch("/api/core/sessions");
       setData(next);
-      setSelected(null);
+      return next;
     } catch (err) {
       toast(String(err.message || err), false);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -25,14 +27,29 @@ export function SessionsPage() {
     loadSessions();
   }, []);
 
-  async function openSession(id) {
-    try {
-      const detail = await apiFetch("/api/core/sessions/" + encodeURIComponent(id));
-      setSelected(detail);
-    } catch (err) {
-      toast(String(err.message || err), false);
+  useEffect(() => {
+    if (!sessionId) {
+      setDetail(null);
+      return;
     }
-  }
+    let alive = true;
+    setDetailLoading(true);
+    apiFetch("/api/core/sessions/" + encodeURIComponent(sessionId))
+      .then((next) => {
+        if (alive) setDetail(next);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        toast(String(err.message || err), false);
+        onBack();
+      })
+      .finally(() => {
+        if (alive) setDetailLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [sessionId]);
 
   async function toggleMode(session) {
     const kind = session.kind === "persistent" ? "temp" : "persistent";
@@ -57,8 +74,23 @@ export function SessionsPage() {
     }
   }
 
-  if (selected) {
-    return <SessionDetail detail={selected} onBack={loadSessions} />;
+  if (sessionId) {
+    if (!detail) {
+      return (
+        <div>
+          <div className="page-header">
+            <h3>
+              Session: <span className="mono">{sessionId}</span>
+            </h3>
+            <button type="button" className="btn btn-default btn-xs" onClick={onBack}>
+              &larr; Back to sessions
+            </button>
+          </div>
+          <p className="muted">{detailLoading ? "Loading session..." : "Session was not found."}</p>
+        </div>
+      );
+    }
+    return <SessionDetail detail={detail} onBack={onBack} />;
   }
 
   const list = data.sessions || [];
@@ -95,7 +127,11 @@ export function SessionsPage() {
                 <tr key={session.id}>
                   <td>
                     <div className="row-gap-xs">
-                      <button type="button" className="link-button mono text-sm" onClick={() => openSession(session.id)}>
+                      <button
+                        type="button"
+                        className="link-button mono text-sm"
+                        onClick={() => onOpen(session.id)}
+                      >
                         {session.id}
                       </button>
                       <span className={session.kind === "persistent" ? "badge badge-teal" : "badge badge-accent"}>

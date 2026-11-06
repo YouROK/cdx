@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yourok/cdx/internal/daemon"
 	"github.com/yourok/cdx/internal/paths"
@@ -62,29 +63,62 @@ func TestToolProgressLabel(t *testing.T) {
 
 func TestTurnSummaryFormat(t *testing.T) {
 	s := newTurnSummary()
-	s.recordStart(map[string]any{
-		"tool_name": "read_file",
-		"tool_args": map[string]any{"path": "/tmp/x.js"},
-	})
-	s.recordStart(map[string]any{
-		"tool_name": "shell",
-		"tool_args": map[string]any{"command": "ls -la"},
-	})
-	s.recordEnd(map[string]any{
-		"tool_name": "shell",
-		"tool_args": map[string]any{"command": "ls -la"},
-		"tool_out":  "error: command timed out",
-	})
+	s.recordStart(map[string]any{"tool_name": "write_file", "tool_args": map[string]any{"path": "/tmp/a.js"}})
+	s.recordStart(map[string]any{"tool_name": "edit_file", "tool_args": map[string]any{"path": "/tmp/b.js"}})
 
 	out := s.format(map[string]any{
 		"steps":          float64(16),
 		"content":        "",
 		"stopped_reason": "max_steps",
-	})
-	for _, want := range []string{"Steps: 16", "read_file x1", "shell x1", "/tmp/x.js", "ls -la", "Tool errors", "tool-step limit"} {
+		"session":        map[string]any{"tokens_in": float64(7906208), "tokens_out": float64(100050)},
+	}, 4*time.Minute+12*time.Second)
+
+	for _, want := range []string{"Done in 4m12s", "16 steps", "7.9M in / 100k out tokens", "2 files (a.js, b.js)", "tool-step limit"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("summary missing %q:\n%s", want, out)
 		}
+	}
+	for _, unwanted := range []string{"Tool errors", "Shell commands", "Read paths"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("summary must not contain %q:\n%s", unwanted, out)
+		}
+	}
+}
+
+func TestSingleLineFlattensProgress(t *testing.T) {
+	got := singleLine("shell cd /tmp && cat > t.js <<'EOF'\nconst fs=require('fs')\n\tvm\x1b[31m")
+	if strings.ContainsAny(got, "\n\t") || strings.Contains(got, "\x1b") {
+		t.Fatalf("progress text must be one printable line: %q", got)
+	}
+	if got != "shell cd /tmp && cat > t.js <<'EOF' const fs=require('fs') vm" {
+		t.Fatalf("unexpected flat label: %q", got)
+	}
+	if singleLine("  ") != "" {
+		t.Fatalf("blank labels must stay empty")
+	}
+}
+
+func TestFormatHelpers(t *testing.T) {
+	if got := formatDuration(12 * time.Second); got != "12s" {
+		t.Fatalf("unexpected duration: %q", got)
+	}
+	if got := formatDuration(2*time.Minute + 14*time.Second); got != "2m14s" {
+		t.Fatalf("unexpected duration: %q", got)
+	}
+	if got := formatDuration(3 * time.Minute); got != "3m" {
+		t.Fatalf("unexpected duration: %q", got)
+	}
+	if got := formatTokens(987); got != "987" {
+		t.Fatalf("unexpected tokens: %q", got)
+	}
+	if got := formatTokens(1200); got != "1.2k" {
+		t.Fatalf("unexpected tokens: %q", got)
+	}
+	if got := formatTokens(2000); got != "2k" {
+		t.Fatalf("unexpected tokens: %q", got)
+	}
+	if got := formatTokens(7906208); got != "7.9M" {
+		t.Fatalf("unexpected tokens: %q", got)
 	}
 }
 
@@ -195,7 +229,7 @@ func TestCLIAndDaemonEndToEndWithPlugins(t *testing.T) {
 	if err := app.Run([]string{"Please run sensitive op"}); err != nil {
 		t.Fatalf("prompt run failed: %v", err)
 	}
-	if !strings.Contains(stderr.String(), "permission required:") || !strings.Contains(stderr.String(), "[1] once") {
+	if !strings.Contains(stderr.String(), "Permission required") || !strings.Contains(stderr.String(), "[1] once") {
 		t.Fatalf("expected numbered permission prompt on stderr, got: %s", stderr.String())
 	}
 	if strings.TrimSpace(stdout.String()) != "Done: executed on prod" {
