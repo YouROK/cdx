@@ -41,16 +41,25 @@ function setup(cdx) {
     return found;
   }
 
+  // Workspace rules are a fallback for prompts that do not carry their own.
+  function buildWorkspaceBlock(workdir) {
+    return [
+      "## Workspace",
+      "- Working directory: " + workdir + ". It is the base for relative paths,",
+      "  not a reason to read its contents.",
+      "- Paths outside it are fine when the task needs them (system files, logs,",
+      "  an explicit path in the request).",
+      "- No broad scans (find /, ls -R, grep -r) unless the request asks for a",
+      "  search."
+    ].join("\n");
+  }
+
+  function hasWorkspaceBlock(prompt) {
+    return typeof prompt === "string" && prompt.indexOf("## Workspace") !== -1;
+  }
+
   function buildEnvironmentBlock(payload) {
     var lines = [];
-    if (payload.workdir) {
-      lines.push("## Workspace");
-      lines.push("- path: " + payload.workdir);
-      lines.push("- Treat this directory as the root for relative paths.");
-      lines.push("- Work inside it unless the request explicitly names another path.");
-      lines.push("- Do not recursively search /, the home directory, or parent directories.");
-      lines.push("");
-    }
 
     lines.push("## Environment");
     var today = new Date().toISOString().slice(0, 10);
@@ -70,7 +79,8 @@ function setup(cdx) {
     return lines.join("\n");
   }
 
-  // Priority 10 runs after presets plugin (priority 5): appends AGENTS.md, summary, and Environment/Tools block.
+  // Priority 10 runs after presets plugin (priority 5): appends AGENTS.md, summary,
+  // and Environment/Tools block, plus workspace rules when the prompt has none.
   cdx.hooks.on("session:before_turn", 10, function(payload) {
     var cfg = getSettings();
     var parts = [];
@@ -79,6 +89,10 @@ function setup(cdx) {
       parts.push(payload.system_prompt);
     } else {
       parts.push("You are cdx, a concise and capable command-line coding assistant.");
+    }
+
+    if (payload.workdir && !hasWorkspaceBlock(payload.system_prompt)) {
+      parts.push(buildWorkspaceBlock(payload.workdir));
     }
 
     if (cfg.load_agents_md && payload.workdir) {
