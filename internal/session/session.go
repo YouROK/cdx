@@ -92,6 +92,7 @@ type TurnRequest struct {
 // TurnEvent is emitted during a turn (text deltas, reasoning deltas, tool starts/results).
 type TurnEvent struct {
 	Type     string         `json:"type"` // "session", "text", "reasoning", "tool_start", "tool_end", "done"
+	Step     int            `json:"step,omitempty"`
 	Delta    string         `json:"delta,omitempty"`
 	Session  *Session       `json:"session,omitempty"`
 	ToolName string         `json:"tool_name,omitempty"`
@@ -119,6 +120,9 @@ type Orchestrator struct {
 	nowFn    func() time.Time
 
 	activeMu sync.Mutex
+
+	liveMu sync.Mutex
+	live   map[string]*LiveTurn
 }
 
 // NewOrchestrator creates a session Orchestrator.
@@ -132,6 +136,7 @@ func NewOrchestrator(st *store.Store, eb *bus.Bus, reg *plugin.Registry, logger 
 		registry: reg,
 		log:      logger.Tagged("Session"),
 		nowFn:    time.Now,
+		live:     make(map[string]*LiveTurn),
 	}
 }
 
@@ -585,9 +590,8 @@ func (o *Orchestrator) SaveMessages(s *Session, msgs []Message) error {
 }
 
 // RunTurn executes a full user turn, including hooks, provider streaming, and tool call iterations.
-func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent func(TurnEvent)) (*TurnResult, error) {
+func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent func(TurnEvent)) (result *TurnResult, err error) {
 	var sess *Session
-	var err error
 	if req.SessionID != "" {
 		var found bool
 		sess, found, err = o.GetSession(req.SessionID)
@@ -613,7 +617,42 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 	if err != nil {
 		return nil, err
 	}
+	// The live view splits the stored list, so count it before dropping
+	// unanswered tool calls.
+	storedCount := len(history)
 	history = repairToolCalls(history)
+
+	modelName := req.Model
+	if modelName == "" {
+		modelName = sess.Model
+	}
+
+	live := o.beginLive(sess, req.Prompt, modelName, storedCount)
+	defer func() {
+		if live == nil {
+			return
+		}
+		reason := ""
+		if result != nil {
+			reason = result.StoppedReason
+		}
+		if err != nil {
+			reason = "error"
+			if ctx.Err() != nil {
+				reason = "interrupted"
+			}
+		}
+		o.finishLive(live, reason, err)
+	}()
+
+	emit := func(ev TurnEvent) {
+		if live != nil {
+			o.applyLive(live, ev)
+		}
+		if onEvent != nil {
+			onEvent(ev)
+		}
+	}
 
 	now := o.nowFn().Unix()
 	history = append(history, Message{
@@ -640,11 +679,6 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 		save()
 	}()
 	save()
-
-	modelName := req.Model
-	if modelName == "" {
-		modelName = sess.Model
-	}
 
 	var finalContent, finalReasoning string
 	var lastUsage map[string]any
@@ -709,14 +743,11 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 				Tools:        toolSpecs,
 				Options:      map[string]any{"session_id": sess.ID},
 			}, func(se plugin.StreamEvent) {
-				if onEvent == nil {
-					return
-				}
 				switch se.Type {
 				case "text":
-					onEvent(TurnEvent{Type: "text", Delta: se.Delta})
+					emit(TurnEvent{Type: "text", Step: steps, Delta: se.Delta})
 				case "reasoning":
-					onEvent(TurnEvent{Type: "reasoning", Delta: se.Delta})
+					emit(TurnEvent{Type: "reasoning", Step: steps, Delta: se.Delta})
 				}
 			})
 			if err != nil {
@@ -798,9 +829,7 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 					}
 				}
 
-				if onEvent != nil {
-					onEvent(TurnEvent{Type: "tool_start", ToolName: toolName, ToolArgs: args})
-				}
+				emit(TurnEvent{Type: "tool_start", Step: steps, ToolName: toolName, ToolArgs: args})
 
 				toolOut, callErr := o.registry.CallTool(ctx, toolName, args)
 				var contentStr string
@@ -826,9 +855,7 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 					}
 				}
 
-				if onEvent != nil {
-					onEvent(TurnEvent{Type: "tool_end", ToolName: toolName, ToolArgs: args, ToolOut: contentStr})
-				}
+				emit(TurnEvent{Type: "tool_end", Step: steps, ToolName: toolName, ToolArgs: args, ToolOut: contentStr})
 
 				history = append(history, Message{
 					Role:       "tool",
@@ -879,9 +906,7 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 	}
 	completed = true
 
-	if onEvent != nil {
-		onEvent(TurnEvent{Type: "done", Session: sess, Usage: lastUsage})
-	}
+	emit(TurnEvent{Type: "done", Session: sess, Usage: lastUsage})
 
 	return &TurnResult{
 		Session:       sess,

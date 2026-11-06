@@ -124,3 +124,10 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Clip an oversized summary on read, so a session with a bloated summary recovers on the next turn.
 - [x] Expose the summary limit in the Context & Memory settings.
 - [x] Summarize dropped messages only once per session, so each turn no longer re-appends the whole dropped history.
+
+## Stage 16: Live Session View
+- [x] Track the running turn in the session orchestrator: streamed text, reasoning, tool calls, and the pre-turn history length.
+- [x] Expose `GET /api/core/sessions/:id/live` and report running session IDs in the sessions list.
+- [x] Add a `Live` view to the dashboard: the current turn at the bottom, the newest stored messages above it, and older messages behind a "Show earlier" button.
+- [x] Poll the live state while the view is open and refetch the history when a turn starts or finishes.
+- [x] Cover the live state with unit tests and the endpoint with a daemon test.

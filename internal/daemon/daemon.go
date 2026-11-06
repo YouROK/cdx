@@ -308,6 +308,7 @@ func (d *Daemon) registerCoreRoutes() {
 		c.JSON(http.StatusOK, gin.H{
 			"sessions":       list,
 			"temp_ttl_hours": int(d.sessions.TempTTL().Hours()),
+			"live":           d.sessions.LiveSessionIDs(),
 		})
 	})
 
@@ -405,6 +406,20 @@ func (d *Daemon) registerCoreRoutes() {
 			"session":  sess,
 			"messages": msgs,
 		})
+	})
+
+	d.router.Handle("core", "GET", "/api/core/sessions/:id/live", func(c *gin.Context) {
+		id := c.Param("id")
+		turn, ok := d.sessions.GetLiveTurn(id)
+		if !ok {
+			c.JSON(http.StatusOK, gin.H{
+				"session_id": id,
+				"running":    false,
+				"steps":      []session.LiveStep{},
+			})
+			return
+		}
+		c.JSON(http.StatusOK, turn)
 	})
 
 	d.router.Handle("core", "GET", "/api/core/logs", func(c *gin.Context) {

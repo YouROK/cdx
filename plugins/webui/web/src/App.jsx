@@ -4,6 +4,7 @@ import { activeSection, navigate, parseRoute } from "./route.js";
 import { Icon } from "./icons.jsx";
 import { PluginPage } from "./PluginPage.jsx";
 import { GeneralPage } from "./pages/GeneralPage.jsx";
+import { LiveSessionPage } from "./pages/LiveSessionPage.jsx";
 import { SessionsPage } from "./pages/SessionsPage.jsx";
 import { PluginsPage } from "./pages/PluginsPage.jsx";
 import { LogsPage } from "./pages/LogsPage.jsx";
@@ -133,11 +134,21 @@ export function App() {
         <div className="page">
           {section === "general" ? <GeneralPage status={status} onRefresh={refreshStatus} /> : null}
           {section === "sessions" ? (
-            <SessionsPage
-              sessionId={route.parts[1] || ""}
-              onOpen={(id) => navigate("/sessions/" + encodeURIComponent(id))}
-              onBack={() => navigate("/sessions")}
-            />
+            route.parts[2] === "live" && route.parts[1] ? (
+              <LiveSessionPage
+                key={route.parts[1]}
+                sessionId={route.parts[1]}
+                onOpenHistory={() => navigate("/sessions/" + encodeURIComponent(route.parts[1]))}
+                onBack={() => navigate("/sessions")}
+              />
+            ) : (
+              <SessionsPage
+                sessionId={route.parts[1] || ""}
+                onOpen={(id) => navigate("/sessions/" + encodeURIComponent(id))}
+                onLive={(id) => navigate("/sessions/" + encodeURIComponent(id) + "/live")}
+                onBack={() => navigate("/sessions")}
+              />
+            )
           ) : null}
           {section === "plugins" ? <PluginsPage onChanged={refreshStatus} /> : null}
           {section === "logs" ? <LogsPage /> : null}

@@ -1,31 +1,39 @@
 import { useEffect, useState } from "react";
 import { apiFetch, postJSON } from "../api.js";
+import { MessageRow } from "../messages.jsx";
 import { useUI } from "../ui.jsx";
 
-export function SessionsPage({ sessionId, onOpen, onBack }) {
+export function SessionsPage({ sessionId, onOpen, onLive, onBack }) {
   const { toast, confirm } = useUI();
-  const [data, setData] = useState({ sessions: [], temp_ttl_hours: 24 });
+  const [data, setData] = useState({ sessions: [], temp_ttl_hours: 24, live: [] });
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  async function loadSessions() {
-    setLoading(true);
+  async function loadSessions(quiet) {
+    if (!quiet) setLoading(true);
     try {
       const next = await apiFetch("/api/core/sessions");
       setData(next);
       return next;
     } catch (err) {
-      toast(String(err.message || err), false);
+      if (!quiet) toast(String(err.message || err), false);
       return null;
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }
 
   useEffect(() => {
     loadSessions();
   }, []);
+
+  // Keep the live markers fresh while the session list is open.
+  useEffect(() => {
+    if (sessionId) return;
+    const timer = setInterval(() => loadSessions(true), 5000);
+    return () => clearInterval(timer);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -90,15 +98,16 @@ export function SessionsPage({ sessionId, onOpen, onBack }) {
         </div>
       );
     }
-    return <SessionDetail detail={detail} onBack={onBack} />;
+    return <SessionDetail detail={detail} onBack={onBack} onLive={() => onLive(sessionId)} />;
   }
 
   const list = data.sessions || [];
+  const liveIDs = new Set(data.live || []);
   return (
     <div>
       <div className="page-header">
         <h3>Sessions</h3>
-        <button type="button" className="btn btn-default btn-xs" onClick={loadSessions}>
+        <button type="button" className="btn btn-default btn-xs" onClick={() => loadSessions()}>
           Refresh
         </button>
       </div>
@@ -137,6 +146,12 @@ export function SessionsPage({ sessionId, onOpen, onBack }) {
                       <span className={session.kind === "persistent" ? "badge badge-teal" : "badge badge-accent"}>
                         {session.kind === "persistent" ? "persistent" : "temp (" + (data.temp_ttl_hours || 24) + "h)"}
                       </span>
+                      {liveIDs.has(session.id) ? (
+                        <span className="badge badge-teal live-badge">
+                          <span className="live-dot" />
+                          live
+                        </span>
+                      ) : null}
                     </div>
                   </td>
                   <td className="mono text-xs muted">{session.workdir}</td>
@@ -144,6 +159,9 @@ export function SessionsPage({ sessionId, onOpen, onBack }) {
                   <td className="text-xs muted">{new Date((session.updated_at || 0) * 1000).toLocaleString()}</td>
                   <td className="sess-actions">
                     <div className="row-actions">
+                      <button type="button" className="btn btn-light btn-xs" onClick={() => onLive(session.id)}>
+                        Live
+                      </button>
                       <button type="button" className="btn btn-light btn-xs" onClick={() => toggleMode(session)}>
                         {session.kind === "persistent" ? "Make temporary" : "Make persistent"}
                       </button>
@@ -162,7 +180,7 @@ export function SessionsPage({ sessionId, onOpen, onBack }) {
   );
 }
 
-function SessionDetail({ detail, onBack }) {
+function SessionDetail({ detail, onBack, onLive }) {
   const session = detail.session || {};
   const messages = detail.messages || [];
   let totalIn = session.tokens_in || 0;
@@ -186,9 +204,14 @@ function SessionDetail({ detail, onBack }) {
             <div className="badge badge-warn mt-2">stopped: {session.stopped_reason}</div>
           ) : null}
         </div>
-        <button type="button" className="btn btn-default btn-xs" onClick={onBack}>
-          &larr; Back to sessions
-        </button>
+        <div className="row-gap-xs">
+          <button type="button" className="btn btn-light btn-xs" onClick={onLive}>
+            Live
+          </button>
+          <button type="button" className="btn btn-default btn-xs" onClick={onBack}>
+            &larr; Back to sessions
+          </button>
+        </div>
       </div>
       <div className="stat-grid">
         <div className="stat-card">
@@ -213,62 +236,6 @@ function SessionDetail({ detail, onBack }) {
           <MessageRow key={index} message={message} session={session} />
         ))}
       </div>
-    </div>
-  );
-}
-
-function MessageRow({ message, session }) {
-  const role = message.role;
-  const toolCalls = message.tool_calls || [];
-  const content = String(message.content || "");
-  const reasoning = String(message.reasoning || "");
-  if (!content.trim() && !reasoning.trim() && toolCalls.length === 0) return null;
-
-  let roleLabel = role;
-  if (role === "assistant") {
-    let model = message.model || session.model || "";
-    if (message.provider && model && model.indexOf("/") === -1) model = message.provider + "/" + model;
-    if (model) roleLabel = "assistant (" + model + ")";
-  } else if (role === "tool" && message.name) {
-    roleLabel = "tool: " + message.name;
-  }
-  const badgeClass = role === "assistant" ? "badge-teal" : role === "user" ? "badge-accent" : "badge-warn";
-
-  return (
-    <div className="panel">
-      <div className="row-between mb-xs">
-        <span className={"badge " + badgeClass}>{roleLabel}</span>
-        {message.tokens_in || message.tokens_out ? (
-          <span className="text-xs muted">
-            tokens: {message.tokens_in || 0}/{message.tokens_out || 0}
-          </span>
-        ) : null}
-      </div>
-      {content.trim() ? <pre className="code-block">{content}</pre> : null}
-      {reasoning.trim() ? (
-        <details className="reasoning-block" open={!content.trim()}>
-          <summary>Reasoning</summary>
-          <pre className="code-block">{reasoning}</pre>
-        </details>
-      ) : null}
-      {role === "assistant" && toolCalls.length > 0 ? (
-        <div className="tool-calls">
-          {toolCalls.map((call, index) => {
-            let args = "";
-            try {
-              args = JSON.stringify(call.arguments || {});
-            } catch {
-              args = "";
-            }
-            if (args.length > 240) args = args.slice(0, 240) + "...";
-            return (
-              <div key={index} className="mono text-xs">
-                {call.name} {args}
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
     </div>
   );
 }

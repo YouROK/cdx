@@ -11,8 +11,11 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yourok/cdx/internal/paths"
+	"github.com/yourok/cdx/internal/plugin"
+	"github.com/yourok/cdx/internal/session"
 )
 
 func repoPluginsDir(t *testing.T) string {
@@ -262,5 +265,113 @@ func TestDeclarativeSettingsEndpoints(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || saved.Values["name"] != "custom" || saved.Values["enabled"] != false || !saved.Secrets["token"] {
 		t.Fatalf("unexpected saved settings: status=%d saved=%+v", resp.StatusCode, saved)
+	}
+}
+
+// TestLiveSessionEndpoint checks that the dashboard can follow a running turn.
+func TestLiveSessionEndpoint(t *testing.T) {
+	tmp := t.TempDir()
+	layout := paths.ResolveWithHome(tmp, func(string) string { return "" })
+	layout.PluginDirs = []string{repoPluginsDir(t)}
+
+	d, err := New(context.Background(), Options{Layout: layout, HTTPAddr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("daemon.New failed: %v", err)
+	}
+	if err := d.Start(); err != nil {
+		t.Fatalf("daemon.Start failed: %v", err)
+	}
+	defer d.Stop()
+
+	baseURL := "http://" + d.HTTPAddr()
+	page, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET / failed: %v", err)
+	}
+	body, _ := io.ReadAll(page.Body)
+	page.Body.Close()
+	token := tokenFromPage(t, string(body))
+	if token == "" {
+		t.Fatal("the served page does not carry the API token")
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	d.registry.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "mock-live", Name: "mock-live", Default: true}}, nil
+		},
+		Complete: func(_ context.Context, _ plugin.CompleteRequest, onStream func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			onStream(plugin.StreamEvent{Type: "text", Delta: "partial"})
+			close(started)
+			<-release
+			return &plugin.CompleteResponse{Content: "partial done"}, nil
+		},
+	})
+
+	workdir := filepath.Join(tmp, "work")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = d.sessions.RunTurn(context.Background(), session.TurnRequest{
+			Workdir: workdir,
+			Mode:    session.ModeAuto,
+			Prompt:  "watch me",
+		}, nil)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the mock provider was not called")
+	}
+
+	var list struct {
+		Sessions []session.Session `json:"sessions"`
+		Live     []string          `json:"live"`
+	}
+	listResp := apiGet(t, baseURL+"/api/core/sessions", token)
+	_ = json.NewDecoder(listResp.Body).Decode(&list)
+	listResp.Body.Close()
+	if len(list.Sessions) != 1 || len(list.Live) != 1 || list.Live[0] != list.Sessions[0].ID {
+		t.Fatalf("unexpected session list: sessions=%+v live=%v", list.Sessions, list.Live)
+	}
+	id := list.Sessions[0].ID
+
+	var live session.LiveTurn
+	liveResp := apiGet(t, baseURL+"/api/core/sessions/"+id+"/live", token)
+	_ = json.NewDecoder(liveResp.Body).Decode(&live)
+	liveResp.Body.Close()
+	if !live.Running || live.Prompt != "watch me" || live.HistoryCount != 0 {
+		t.Fatalf("unexpected live state: %+v", live)
+	}
+	if len(live.Steps) != 1 || live.Steps[0].Text != "partial" {
+		t.Fatalf("unexpected live steps: %+v", live.Steps)
+	}
+
+	close(release)
+	<-done
+
+	liveResp = apiGet(t, baseURL+"/api/core/sessions/"+id+"/live", token)
+	_ = json.NewDecoder(liveResp.Body).Decode(&live)
+	liveResp.Body.Close()
+	if live.Running {
+		t.Fatalf("expected the finished turn, got %+v", live)
+	}
+	if len(live.Steps) != 1 || live.Steps[0].Text != "partial" {
+		t.Fatalf("unexpected finished live steps: %+v", live.Steps)
+	}
+
+	// An unknown session still answers with an idle snapshot instead of a 404.
+	var idle session.LiveTurn
+	idleResp := apiGet(t, baseURL+"/api/core/sessions/ses_unknown/live", token)
+	_ = json.NewDecoder(idleResp.Body).Decode(&idle)
+	idleResp.Body.Close()
+	if idle.Running || idle.SessionID != "ses_unknown" {
+		t.Fatalf("unexpected idle snapshot: %+v", idle)
 	}
 }

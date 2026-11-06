@@ -447,7 +447,7 @@ textarea:focus {
 .table td.sess-actions {
   text-align: right;
   white-space: nowrap;
-  min-width: 210px;
+  min-width: 300px;
 }
 
 .row-actions {
@@ -950,4 +950,103 @@ textarea:focus {
   word-break: break-word;
   max-height: 220px;
   overflow: auto;
+}
+
+/* Live session view */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+}
+
+.live-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 0 8px;
+}
+
+.live-section-head h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.live-turn {
+  border-color: var(--accent-line);
+}
+
+.live-prompt {
+  margin-bottom: 10px;
+}
+
+.live-prompt .code-block {
+  margin-top: 6px;
+  max-height: 24vh;
+}
+
+.live-step {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+.live-step:first-of-type {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.live-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.live-tool {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.live-tool details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.live-tool .code-block {
+  margin-top: 8px;
+  max-height: 32vh;
+}
+
+.live-bottom {
+  height: 1px;
 }
