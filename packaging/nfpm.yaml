@@ -1,0 +1,25 @@
+# Package definition for nFPM (https://nfpm.goreleaser.com).
+# STAGE_DIR, PKG_VERSION, and PKG_ARCH are provided by scripts/package.sh.
+name: cdx
+arch: ${PKG_ARCH}
+platform: linux
+version: ${PKG_VERSION}
+section: utils
+priority: optional
+maintainer: YouROK <8yourok8@mail.ru>
+description: |
+  A command-line coding agent with a microkernel architecture.
+  The core provides IPC, storage, the HTTP router, the plugin runtime, and the
+  session loop; providers, tools, permissions, context assembly, and the web
+  dashboard are plugins.
+vendor: YouROK
+homepage: https://github.com/YouROK/cdx
+license: GPL-3.0-only
+contents:
+  - src: ${STAGE_DIR}/cdx
+    dst: /usr/bin/cdx
+    expand: true
+  - src: ${STAGE_DIR}/plugins
+    dst: /usr/share/cdx/plugins
+    type: tree
+    expand: true

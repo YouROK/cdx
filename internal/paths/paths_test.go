@@ -31,6 +31,9 @@ func TestResolveWithHomeDefaults(t *testing.T) {
 	if l.PluginDirs[0] != "/home/tester/.local/share/cdx/plugins" {
 		t.Fatalf("unexpected user plugin dir: %s", l.PluginDirs[0])
 	}
+	if l.PluginDirs[1] != "/usr/share/cdx/plugins" {
+		t.Fatalf("unexpected system plugin dir: %s", l.PluginDirs[1])
+	}
 }
 
 func TestResolveWithHomeOverrides(t *testing.T) {

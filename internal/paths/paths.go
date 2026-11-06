@@ -8,7 +8,7 @@ import (
 )
 
 // SystemPluginDir is the default directory where system plugins are installed.
-const SystemPluginDir = "/usr/local/share/cdx/plugins"
+const SystemPluginDir = "/usr/share/cdx/plugins"
 
 // Layout holds all resolved filesystem paths for a cdx instance.
 type Layout struct {

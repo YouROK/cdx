@@ -1,7 +1,7 @@
 BIN := bin/cdx
 CACHE_DIR ?= $(CURDIR)/.cache
 
-PREFIX ?= /usr/local
+PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
 SHAREDIR ?= $(PREFIX)/share/cdx
 PLUGINS_DIR ?= $(SHAREDIR)/plugins

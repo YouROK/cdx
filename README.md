@@ -36,9 +36,54 @@ make
 sudo make install
 ```
 
-The binary goes to `/usr/local/bin/cdx`, the plugins to
-`/usr/local/share/cdx/plugins`. User data stays in `~/.local/share/cdx`,
+The binary goes to `/usr/bin/cdx`, the plugins to
+`/usr/share/cdx/plugins`. User data stays in `~/.local/share/cdx`,
 `~/.config/cdx`, and `~/.local/state/cdx`.
+
+## Releases
+
+Pushing any tag makes GitHub Actions test the project and publish a release. The
+tag becomes the version: a leading `v` is dropped, and characters that package
+formats do not accept are replaced with dots. There are assets for `i386`,
+`x86_64`, `armv7`, and `aarch64`:
+
+* `.deb` for Debian and Ubuntu;
+* `.rpm` for Fedora, RHEL, and openSUSE;
+* `.apk` for Alpine;
+* `cdx_<version>_linux_<arch>.zip` with the binary, the default plugins, and the
+  `install.sh` and `uninstall.sh` scripts;
+* `SHA256SUMS` with the checksums of every asset.
+
+The package architecture names follow the convention of each format:
+
+| Machine | deb | rpm | apk | zip |
+|---|---|---|---|---|
+| x86 | i386 | i386 | x86 | i386 |
+| x86_64 | amd64 | x86_64 | x86_64 | x86_64 |
+| armv7 | armhf | armv7hl | armv7 | armv7 |
+| arm64 | arm64 | aarch64 | aarch64 | aarch64 |
+
+Install a package with the distribution tool, for example on x86_64:
+
+```bash
+sudo apt install ./cdx_<version>_amd64.deb
+sudo dnf install ./cdx-<version>-1.x86_64.rpm
+sudo apk add --allow-untrusted ./cdx_<version>_x86_64.apk
+```
+
+The Alpine package is unsigned, hence `--allow-untrusted`.
+
+The zip installs into the same locations as `make install`:
+
+```bash
+unzip cdx_<version>_linux_x86_64.zip -d cdx
+sudo ./cdx/install.sh          # /usr/bin/cdx and /usr/share/cdx/plugins
+sudo ./cdx/uninstall.sh        # keeps the user data
+```
+
+`install.sh` and `uninstall.sh` accept `--prefix`, `--bindir`, and
+`--plugins-dir`. With a prefix other than `/usr`, start `cdx` with
+`CDX_SYSTEM_PLUGIN_DIR` pointing at the plugin directory.
 
 ## Use
 
@@ -136,8 +181,10 @@ the implementation stages.
 ```text
 cmd/cdx/            entry point
 internal/           core: bus, ipc, router, plugin runtime, session loop, storage
+packaging/          nfpm config and the install/uninstall scripts for releases
 plugins/            default plugins, each with an optional React panel in web/
 scripts/dev.mjs     watch build for the interface and panels
+scripts/package.sh  release artifacts for one architecture: zip, deb, rpm, apk
 test/live/          integration tests against real models (CDX_LIVE_API_KEY)
 ```
 

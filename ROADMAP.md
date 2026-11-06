@@ -131,3 +131,10 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Add a `Live` view to the dashboard: the current turn at the bottom, the newest stored messages above it, and older messages behind a "Show earlier" button.
 - [x] Poll the live state while the view is open and refetch the history when a turn starts or finishes.
 - [x] Cover the live state with unit tests and the endpoint with a daemon test.
+
+## Stage 17: Release Packaging
+- [x] Build Linux binaries for `i386`, `x86_64`, `armv7`, and `aarch64` from a tag.
+- [x] Publish deb, rpm, and apk packages for every architecture.
+- [x] Publish a zip with the binary, the default plugins, and the install/uninstall scripts.
+- [x] Move the default system plugin directory to `/usr/share/cdx/plugins` and the Makefile prefix to `/usr`.
+- [x] Gate the release on `go vet`, `go test ./...`, and the frontend tests.

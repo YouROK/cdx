@@ -96,7 +96,7 @@ The bus connects the core and all plugins without coupling them together. It sup
 * Exposes declarative settings through `GET/POST /api/core/plugins/:id/settings`, backed by the plugin's isolated plain and encrypted storage. Plugins that already own a config endpoint can set `config_url` instead.
 
 ### 3.6. Plugin Host (`internal/plugin`)
-* Discovers plugins from configured directories (`/usr/local/share/cdx/plugins`, `~/.local/share/cdx/plugins`).
+* Discovers plugins from configured directories (`/usr/share/cdx/plugins`, `~/.local/share/cdx/plugins`).
 * Each plugin lives in its own folder with a minimal `manifest.json` (`id`, `name`, `version`, `description`, `entry`) and its JS/web files.
 * Runs each plugin in a dedicated `goja` VM goroutine (thread-safe command channel).
 * Supports an optional worker pool (`workers` in `manifest.json`): functions explicitly marked with `cdx.inWorker(fn)`, currently provider `complete` and tool handlers, execute in isolated worker VMs, each on its own goroutine, while the control VM keeps serving HTTP routes, hooks, UI, and status requests. Worker VMs share `storage`/`secrets` but not JS memory, so shared mutable state must live in storage.
