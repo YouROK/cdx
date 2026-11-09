@@ -193,34 +193,32 @@ function setup(cdx) {
     return uniquePaths(found);
   }
 
+  // Attach a question to the hook payload; the core asks the client and then runs tool:decided.
+  function askPolicy(payload, question) {
+    payload.ask = question;
+    return payload;
+  }
+
   function askOutsideWorkspace(tool, payload, outside) {
     var workdir = payload.workdir || "";
     var details = toolDetails(tool, payload.arguments || {});
+    details.push({ label: "Permission", value: payload.permission || "edit" });
     if (workdir) details.push({ label: "Working folder", value: workdir });
     for (var i = 0; i < outside.length; i++) {
       details.push({ label: i === 0 ? "Outside" : "", value: outside[i] });
     }
-    var summary = "outside the working folder: " + buildSummary(tool, payload.arguments || {});
-    var ans = cdx.bus.request("client:prompt_user", {
-      kind: "outside_workspace",
-      reason: "outside",
+    return askPolicy(payload, {
+      kind: "permission",
+      tag: "permissions",
       title: toolTitle(tool) + " outside the working folder",
+      body: "The action leaves the working folder.",
       details: details,
-      summary: summary,
-      question: summary,
-      tool: tool,
-      permission: payload.permission || "edit",
-      level: payload.permission || "edit",
-      workspace: workdir,
-      outside: outside,
-      options: ["once", "deny"],
-      arguments: payload.arguments
+      options: [
+        { id: "once", label: "Allow once" },
+        { id: "deny", label: "Deny" }
+      ],
+      default: "once"
     });
-    var choice = (ans && ans.choice) ? String(ans.choice) : (ans && ans.allow ? "once" : "deny");
-    if (choice === "once" || (ans && ans.allow && choice !== "deny")) {
-      return payload;
-    }
-    throw new Error("permission denied by user for tool: " + tool);
   }
 
   cdx.hooks.on("tool:before_call", 10, function(payload) {
@@ -257,52 +255,61 @@ function setup(cdx) {
       return payload;
     }
 
-    var summary = buildSummary(tool, args);
-    var ans = cdx.bus.request("client:prompt_user", {
+    var details = toolDetails(tool, args);
+    details.push({ label: "Permission", value: level });
+    return askPolicy(payload, {
       kind: "permission",
-      reason: "policy",
+      tag: "permissions",
       title: toolTitle(tool),
-      details: toolDetails(tool, args),
-      summary: summary,
-      question: summary,
-      tool: tool,
-      permission: level,
-      level: level,
-      options: ["once", "session", "daemon", "always", "deny"],
-      arguments: args
+      body: buildSummary(tool, args),
+      details: details,
+      options: [
+        { id: "once", label: "Allow once" },
+        { id: "session", label: "Allow for this session" },
+        { id: "daemon", label: "Allow for this daemon run" },
+        { id: "always", label: "Always allow" },
+        { id: "deny", label: "Deny" }
+      ],
+      default: "once"
     });
+  });
 
-    var choice = (ans && ans.choice) ? String(ans.choice) : (ans && ans.allow ? "once" : "deny");
-    var grantKey = level + ":" + tool;
-
-    if (choice === "always") {
-      var cfg = getConfig();
-      cfg.tool_rules[tool] = "allow";
-      cdx.storage.set("config", cfg);
-      daemonGrants[grantKey] = true;
+  // Persist the user's answer and tell the core whether the tool may run.
+  cdx.hooks.on("tool:decided", 10, function(payload) {
+    // Only decide questions this plugin asked; another plugin owns its own hook.
+    if (payload.tag !== "permissions") {
       return payload;
     }
+    var tool = payload.tool || "";
+    var level = payload.permission || "edit";
+    var sessionID = payload.session_id || "";
+    var choice = payload.choice ? String(payload.choice) : "";
+    var allowed = !payload.cancelled && choice !== "" && choice !== "deny";
 
-    if (choice === "daemon" || choice === "runtime") {
-      daemonGrants[grantKey] = true;
-      return payload;
-    }
-
-    if (choice === "session") {
-      if (sessionID && sessionID !== "ephemeral") {
-        if (!sessionGrants[sessionID]) sessionGrants[sessionID] = {};
-        sessionGrants[sessionID][grantKey] = "allow";
-      } else {
+    if (allowed) {
+      var grantKey = level + ":" + tool;
+      if (choice === "always") {
+        var cfg = getConfig();
+        cfg.tool_rules[tool] = "allow";
+        cdx.storage.set("config", cfg);
         daemonGrants[grantKey] = true;
+      } else if (choice === "daemon" || choice === "runtime") {
+        daemonGrants[grantKey] = true;
+      } else if (choice === "session") {
+        if (sessionID && sessionID !== "ephemeral") {
+          if (!sessionGrants[sessionID]) sessionGrants[sessionID] = {};
+          sessionGrants[sessionID][grantKey] = "allow";
+        } else {
+          daemonGrants[grantKey] = true;
+        }
       }
-      return payload;
     }
 
-    if (choice === "once" || (ans && ans.allow && choice !== "deny")) {
-      return payload;
+    payload.allowed = allowed;
+    if (!allowed) {
+      payload.error = "permission denied by user for tool: " + tool;
     }
-
-    throw new Error("permission denied by user for tool: " + tool);
+    return payload;
   });
 
   var api = cdx.http.group("/api/plugins/permissions");

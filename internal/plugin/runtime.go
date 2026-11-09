@@ -18,6 +18,7 @@ import (
 
 	"github.com/yourok/cdx/internal/bus"
 	"github.com/yourok/cdx/internal/logx"
+	"github.com/yourok/cdx/internal/question"
 	"github.com/yourok/cdx/internal/router"
 	"github.com/yourok/cdx/internal/schema"
 	"github.com/yourok/cdx/internal/store"
@@ -439,6 +440,7 @@ func (rt *Runtime) bindCDX(vm *goja.Runtime) {
 	_ = cdxObj.Set("settings", rt.buildSettingsObject(vm))
 	_ = cdxObj.Set("bus", rt.buildBusObject(vm))
 	_ = cdxObj.Set("hooks", rt.buildHooksObject(vm))
+	_ = cdxObj.Set("questions", rt.buildQuestionsObject(vm))
 	_ = cdxObj.Set("http", rt.buildHTTPObject(vm, ""))
 	_ = cdxObj.Set("ui", rt.buildUIObject(vm))
 	_ = cdxObj.Set("tools", rt.buildToolsObject(vm))
@@ -766,6 +768,38 @@ func (rt *Runtime) buildHooksObject(vm *goja.Runtime) *goja.Object {
 			panic(vm.NewGoError(err))
 		}
 		return out
+	})
+	return obj
+}
+
+// buildQuestionsObject exposes the client question broker to plugins, including worker VMs.
+func (rt *Runtime) buildQuestionsObject(vm *goja.Runtime) *goja.Object {
+	obj := vm.NewObject()
+	_ = obj.Set("ask", func(raw map[string]any) map[string]any {
+		data, err := json.Marshal(raw)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		var q question.Question
+		if err := json.Unmarshal(data, &q); err != nil {
+			panic(vm.NewGoError(fmt.Errorf("invalid question: %w", err)))
+		}
+		// The host stamps the source and tag, so a question cannot claim another origin.
+		q.Source = "plugin:" + rt.manifest.ID
+		q.Tag = rt.manifest.ID
+		if strings.TrimSpace(q.Kind) == "" {
+			q.Kind = "custom"
+		}
+		answer, err := question.Ask(rt.currentCtx(), q)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return map[string]any{
+			"choice":    answer.Choice,
+			"text":      answer.Text,
+			"cancelled": answer.Cancelled,
+			"reason":    answer.Reason,
+		}
 	})
 	return obj
 }
@@ -1186,6 +1220,9 @@ func (rt *Runtime) buildSysObject(vm *goja.Runtime) *goja.Object {
 			panic(vm.NewGoError(err))
 		}
 		return hex
+	})
+	_ = obj.Set("env", func(name string) string {
+		return rt.deps.Sys.Env(name)
 	})
 	_ = obj.Set("exec", func(command string, workdir string, timeoutMS int) map[string]any {
 		ctx := rt.currentCtx()

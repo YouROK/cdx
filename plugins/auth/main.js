@@ -1,5 +1,6 @@
 function setup(cdx) {
   var TOKEN_KEY = "token";
+  var REMOTE_ACCESS_ENV = "CDX_ALLOW_REMOTE_HOST";
   var LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1", "[::1]"];
 
   var token = cdx.secrets.get(TOKEN_KEY);
@@ -7,6 +8,24 @@ function setup(cdx) {
     token = cdx.sys.random(32);
     cdx.secrets.set(TOKEN_KEY, token);
     cdx.log.info("Generated a new API token");
+  }
+
+  // Any non-empty value except an explicit negative enables the flag.
+  function envEnabled(name) {
+    var value = "";
+    try {
+      if (typeof cdx.sys.env === "function") value = String(cdx.sys.env(name) || "");
+    } catch (e) {
+      value = "";
+    }
+    value = value.trim().toLowerCase();
+    if (value === "") return false;
+    return value !== "0" && value !== "false" && value !== "no" && value !== "off";
+  }
+
+  var openAccess = envEnabled(REMOTE_ACCESS_ENV);
+  if (openAccess) {
+    cdx.log.warn("Remote access is enabled: host and token checks are disabled");
   }
 
   // Allows access from a non-local host header, which disables the
@@ -49,6 +68,7 @@ function setup(cdx) {
   }
 
   cdx.http.use("/api", function(ctx) {
+    if (openAccess) return;
     if (!allowRemoteHost() && !isLoopback(ctx.host())) {
       ctx.abortWithJSON(403, { error: "requests to the API must use a local host" });
       return;
@@ -61,6 +81,7 @@ function setup(cdx) {
 
   // The dashboard asks for the token to put it into the served page.
   cdx.bus.handle("auth:token", function() {
+    if (openAccess) return { token: "" };
     return { token: token };
   });
 
@@ -75,7 +96,7 @@ function setup(cdx) {
         allow_remote_host: {
           type: "boolean",
           title: "Allow non-local host header",
-          description: "Lets other machines reach the API through a proxy or SSH tunnel. The token is still required.",
+          description: "Lets other machines reach the API through a proxy or SSH tunnel. The token is still required. Setting CDX_ALLOW_REMOTE_HOST disables both checks.",
           default: false
         }
       }

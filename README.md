@@ -90,6 +90,7 @@ sudo ./cdx/uninstall.sh        # keeps the user data
 ```bash
 cdx daemon run --http 127.0.0.1:8787   # start the background daemon
 cdx daemon status                     # state, plugins, HTTP address
+cdx --config                          # print the address and open the settings page
 cdx daemon stop
 cdx "explain what this package does"  # one-shot request in the current directory
 cdx -f task.md                        # take the prompt from a file
@@ -97,11 +98,38 @@ cdx session list                      # sessions bound to directories
 cdx plugins list                      # installed plugins and their tools
 ```
 
+A prompt that arrives while another `cdx` is already working in the same
+directory waits for that turn to finish, then continues the same session.
+Stateless runs (`--no-session`) are not queued. To work in parallel, create a
+separate session with `cdx session new`, which becomes the active session for
+the directory.
+
 ## Web interface
 
 Open `http://127.0.0.1:8787` while the daemon is running. The dashboard renders
 declarative JSON Schema panels and custom plugin page panels, and it contains
 the pages for the core (general settings, sessions, plugins, logs).
+
+`cdx --config` starts the daemon if needed, prints its address, and opens the
+dashboard in the default browser, so the port does not have to be remembered.
+
+### Remote access
+
+The dashboard can be opened from another machine by starting the daemon with
+`CDX_ALLOW_REMOTE_HOST`:
+
+```bash
+CDX_ALLOW_REMOTE_HOST=1 cdx daemon restart
+```
+
+With this variable the daemon listens on `0.0.0.0:8787` when neither
+`CDX_HTTP_ADDR` nor `--http` selects another address. The `auth` plugin accepts
+every `Host` header and skips the API token, so the page opens on another PC
+without extra steps. The variable is read at daemon startup, so restart the
+daemon after changing it; `0`, `false`, `no`, and `off` disable it.
+
+Warning: anyone who can reach the port gets full access to the API. Use a
+firewall, a VPN, or a reverse proxy with TLS and authentication.
 
 ### Access token
 
@@ -116,8 +144,13 @@ The `auth` plugin owns the token:
 * `GET /` gets the token embedded by the `webui` plugin, so the page works
   without a token in the URL and only same-origin scripts can read it.
 
+Both checks are skipped when the daemon starts with `CDX_ALLOW_REMOTE_HOST`
+(see Remote access).
+
 The `API access` page has a single setting: `Allow non-local host header`. It
 is meant for a reverse proxy or an SSH tunnel; the token is still required.
+The `CDX_ALLOW_REMOTE_HOST` environment variable is stronger: it disables both
+checks for the whole process.
 
 If the page reports "Access denied", reload it - the page was loaded before the
 token changed. If the `auth` plugin is disabled or removed, the API is open to
@@ -146,6 +179,10 @@ and the offered answers. Enter picks the default: `once` for permissions and
 `continue` for the step-budget question. The Permissions page controls the
 defaults: read, edit, and dangerous tools each have `allow`, `ask`, or `deny`,
 and a separate option decides what happens outside the working folder.
+
+The model can also ask its own question when a request is ambiguous. Those
+prompts are labelled "The agent asks:" and never carry permission grants, so
+they cannot be confused with a system confirmation.
 
 That outside-folder option is not a sandbox: commands, symlinks, and absolute
 paths can still leave the folder. Use an isolated environment when a hard limit

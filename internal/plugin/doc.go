@@ -29,12 +29,13 @@ var DocCDXObject = []DocEntry{
 	{Signature: "cdx.settings.register(schema) / save(values)", Summary: "Register a JSON Schema for declarative settings; format: 'secret' fields are routed to cdx.secrets and exposed through the plugin settings endpoint"},
 	{Signature: "cdx.tools.register(spec, handler) / list()", Summary: "Register an LLM tool ({ name, description, permission, input_schema }, function(args) {}); wrap handler with cdx.inWorker to use a worker VM"},
 	{Signature: "cdx.providers.register({ listModels, complete }) / listModels()", Summary: "Register as an LLM provider; listModels returns available models, complete(req, emit) runs turns; wrap complete with cdx.inWorker to use a worker VM"},
-	{Signature: "cdx.hooks.on(hookName, priority, handler) / run(hookName, payload)", Summary: "Intercept lifecycle pipelines: session:before_turn, tool:before_call, tool:after_call"},
+	{Signature: "cdx.hooks.on(hookName, priority, handler) / run(hookName, payload)", Summary: "Intercept lifecycle pipelines: session:before_turn, tool:before_call, tool:decided, tool:after_call"},
 	{Signature: "cdx.bus.publish|subscribe|handle|request(topic, payload)", Summary: "Communicate across plugins and core via events and 1-to-1 RPC (e.g. client:prompt_user)"},
+	{Signature: "cdx.questions.ask(question)", Summary: "Ask the active client a question ({ kind, title, body, details, options, default, text }) and return { choice, text, cancelled, reason }; available in worker VMs"},
 	{Signature: "cdx.http.handle|get|post|put|delete|patch|use|group|static()", Summary: "Register HTTP endpoints, Gin middleware (ctx.bindJSON, ctx.next, ctx.abortWithJSON, ctx.set/get), and static assets"},
 	{Signature: "cdx.ui.register({ title, description, order, schema, config_url, entry, ui_api, styles }) / list()", Summary: "Register a declarative JSON Schema panel or a versioned ESM page panel mounted in an isolated shadow root"},
 	{Signature: "cdx.plugins.list|installZip|setEnabled|remove()", Summary: "Inspect, install from .zip URL, enable/disable, or remove plugins"},
-	{Signature: "cdx.sys.readFile|writeFile|stat|readDir|random|exec|fetch()", Summary: "Low-level OS capabilities: filesystem I/O, cryptographic random bytes, shell execution, and HTTP/SSE streaming fetch"},
+	{Signature: "cdx.sys.readFile|writeFile|stat|readDir|random|env|exec|fetch()", Summary: "Low-level OS capabilities: filesystem I/O, cryptographic random bytes, environment lookup, shell execution, and HTTP/SSE streaming fetch"},
 }
 
 // DocHTTPContext lists what a cdx.http handler receives as its context object.

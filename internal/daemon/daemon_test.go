@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/yourok/cdx/internal/ipc"
 	"github.com/yourok/cdx/internal/paths"
 	"github.com/yourok/cdx/internal/plugin"
 	"github.com/yourok/cdx/internal/session"
@@ -28,6 +30,7 @@ func repoPluginsDir(t *testing.T) string {
 }
 
 func TestDefaultPluginsAndWebUI(t *testing.T) {
+	t.Setenv("CDX_ALLOW_REMOTE_HOST", "")
 	tmp := t.TempDir()
 	layout := paths.ResolveWithHome(tmp, func(string) string { return "" })
 	layout.PluginDirs = []string{repoPluginsDir(t)}
@@ -93,11 +96,11 @@ func TestDefaultPluginsAndWebUI(t *testing.T) {
 	_ = json.NewDecoder(statusResp.Body).Decode(&statusData)
 	statusResp.Body.Close()
 
-	if len(statusData.Plugins) != 7 {
-		t.Fatalf("expected 7 default plugins loaded, got %d: %+v", len(statusData.Plugins), statusData.Plugins)
+	if len(statusData.Plugins) != 8 {
+		t.Fatalf("expected 8 default plugins loaded, got %d: %+v", len(statusData.Plugins), statusData.Plugins)
 	}
-	if len(statusData.Tools) != 5 {
-		t.Fatalf("expected 5 local tools registered, got %d: %+v", len(statusData.Tools), statusData.Tools)
+	if len(statusData.Tools) != 6 {
+		t.Fatalf("expected 6 tools registered, got %d: %+v", len(statusData.Tools), statusData.Tools)
 	}
 
 	// 4. The step-limit settings round-trip through the core API.
@@ -151,6 +154,50 @@ func TestDefaultPluginsAndWebUI(t *testing.T) {
 	models, err := d.registry.ListModels(context.Background())
 	if err != nil || len(models) != 1 || models[0].ID != "deepseek/ds-chat" {
 		t.Fatalf("expected core registry to list deepseek/ds-chat, got %+v (err=%v)", models, err)
+	}
+}
+
+// TestRemoteAccessEnvironment covers the API access switch for remote hosts.
+func TestRemoteAccessEnvironment(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  int
+	}{
+		{"enabled", "1", http.StatusOK},
+		{"disabled", "0", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CDX_ALLOW_REMOTE_HOST", tc.value)
+			tmp := t.TempDir()
+			layout := paths.ResolveWithHome(tmp, func(string) string { return "" })
+			layout.PluginDirs = []string{repoPluginsDir(t)}
+
+			d, err := New(context.Background(), Options{Layout: layout, HTTPAddr: "127.0.0.1:0"})
+			if err != nil {
+				t.Fatalf("daemon.New failed: %v", err)
+			}
+			if err := d.Start(); err != nil {
+				t.Fatalf("daemon.Start failed: %v", err)
+			}
+			defer d.Stop()
+
+			req, err := http.NewRequest(http.MethodGet, "http://"+d.HTTPAddr()+"/api/core/status", nil)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			req.Host = "remote.example"
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("GET /api/core/status failed: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status = %d, want %d: %s", resp.StatusCode, tc.want, string(body))
+			}
+		})
 	}
 }
 
@@ -373,5 +420,115 @@ func TestLiveSessionEndpoint(t *testing.T) {
 	idleResp.Body.Close()
 	if idle.Running || idle.SessionID != "ses_unknown" {
 		t.Fatalf("unexpected idle snapshot: %+v", idle)
+	}
+}
+
+func TestConcurrentTurnsOverIPCWaitForTheRunningSession(t *testing.T) {
+	tmp := t.TempDir()
+	layout := paths.ResolveWithHome(tmp, func(string) string { return "" })
+	layout.PluginDirs = nil
+
+	d, err := New(context.Background(), Options{Layout: layout})
+	if err != nil {
+		t.Fatalf("daemon.New failed: %v", err)
+	}
+	if err := d.Start(); err != nil {
+		t.Fatalf("daemon.Start failed: %v", err)
+	}
+	defer d.Stop()
+
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	d.registry.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "mock-live", Name: "mock-live", Default: true}}, nil
+		},
+		Complete: func(ctx context.Context, _ plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			if calls.Add(1) == 1 {
+				close(started)
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			return &plugin.CompleteResponse{Content: "done"}, nil
+		},
+	})
+
+	workdir := filepath.Join(tmp, "work")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+
+	type outcome struct {
+		data any
+		err  error
+	}
+	first := make(chan outcome, 1)
+	go func() {
+		data, err := ipc.Call(context.Background(), layout.SocketPath, "turn.run", map[string]any{
+			"workdir": workdir,
+			"mode":    "auto",
+			"prompt":  "first",
+		}, ipc.ClientCallbacks{})
+		first <- outcome{data: data, err: err}
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first turn did not reach the provider")
+	}
+
+	waited := make(chan struct{}, 1)
+	second := make(chan outcome, 1)
+	go func() {
+		data, err := ipc.Call(context.Background(), layout.SocketPath, "turn.run", map[string]any{
+			"workdir": workdir,
+			"mode":    "auto",
+			"prompt":  "second",
+		}, ipc.ClientCallbacks{
+			OnEvent: func(data any) {
+				ev, _ := data.(map[string]any)
+				if ev["type"] == "waiting" {
+					select {
+					case waited <- struct{}{}:
+					default:
+					}
+				}
+			},
+		})
+		second <- outcome{data: data, err: err}
+	}()
+
+	select {
+	case <-waited:
+	case out := <-second:
+		t.Fatalf("the second turn finished before the first: %+v", out)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second turn did not report waiting")
+	}
+
+	close(release)
+
+	if out := <-first; out.err != nil {
+		t.Fatalf("the first turn failed: %v", out.err)
+	}
+	if out := <-second; out.err != nil {
+		t.Fatalf("the second turn failed: %v", out.err)
+	}
+
+	sessions, err := d.sessions.ListSessions()
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected one session, got %d: %+v", len(sessions), sessions)
+	}
+	if sessions[0].MessageCount != 4 {
+		t.Fatalf("expected 4 messages in the shared session, got %d", sessions[0].MessageCount)
 	}
 }

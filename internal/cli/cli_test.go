@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,6 +151,95 @@ func TestPromptSourceCombinesFileAndText(t *testing.T) {
 
 	if _, err := promptSource(strings.NewReader(""), filepath.Join(t.TempDir(), "missing.md"), nil); err == nil || !strings.Contains(err.Error(), "failed to read prompt file") {
 		t.Fatalf("expected missing file error, got: %v", err)
+	}
+}
+
+func TestSettingsURL(t *testing.T) {
+	cases := []struct{ addr, want string }{
+		{"127.0.0.1:8787", "http://127.0.0.1:8787"},
+		{"0.0.0.0:8787", "http://127.0.0.1:8787"},
+		{":8787", "http://127.0.0.1:8787"},
+		{"[::1]:8787", "http://[::1]:8787"},
+		{"", ""},
+		{"not-an-address", ""},
+	}
+	for _, c := range cases {
+		if got := settingsURL(c.addr); got != c.want {
+			t.Fatalf("settingsURL(%q) = %q, want %q", c.addr, got, c.want)
+		}
+	}
+}
+
+func TestDefaultHTTPAddr(t *testing.T) {
+	t.Setenv("CDX_HTTP_ADDR", "")
+	t.Setenv("CDX_ALLOW_REMOTE_HOST", "")
+	if got := defaultHTTPAddr(); got != "127.0.0.1:8787" {
+		t.Fatalf("default address = %q, want 127.0.0.1:8787", got)
+	}
+
+	t.Setenv("CDX_ALLOW_REMOTE_HOST", "1")
+	if got := defaultHTTPAddr(); got != "0.0.0.0:8787" {
+		t.Fatalf("remote address = %q, want 0.0.0.0:8787", got)
+	}
+
+	t.Setenv("CDX_ALLOW_REMOTE_HOST", "0")
+	if got := defaultHTTPAddr(); got != "127.0.0.1:8787" {
+		t.Fatalf("disabled remote address = %q, want 127.0.0.1:8787", got)
+	}
+
+	t.Setenv("CDX_ALLOW_REMOTE_HOST", "1")
+	t.Setenv("CDX_HTTP_ADDR", "127.0.0.1:9000")
+	if got := defaultHTTPAddr(); got != "127.0.0.1:9000" {
+		t.Fatalf("explicit address = %q, want 127.0.0.1:9000", got)
+	}
+}
+
+func TestConfigCommandOpensDashboard(t *testing.T) {
+	tmp := t.TempDir()
+	layout := paths.ResolveWithHome(tmp, func(string) string { return "" })
+	layout.PluginDirs = []string{filepath.Join(tmp, "plugins")}
+
+	d, err := daemon.New(context.Background(), daemon.Options{Layout: layout, HTTPAddr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("daemon.New failed: %v", err)
+	}
+	if err := d.Start(); err != nil {
+		t.Fatalf("daemon.Start failed: %v", err)
+	}
+	defer d.Stop()
+
+	var stdout, stderr bytes.Buffer
+	var opened string
+	app := &App{
+		Layout:      layout,
+		Stdin:       strings.NewReader(""),
+		Stdout:      &stdout,
+		Stderr:      &stderr,
+		OpenBrowser: func(url string) error { opened = url; return nil },
+	}
+
+	if err := app.Run([]string{"--config"}); err != nil {
+		t.Fatalf("--config failed: %v", err)
+	}
+	want := "http://" + d.HTTPAddr()
+	if opened != want {
+		t.Fatalf("opened %q, want %q", opened, want)
+	}
+	if strings.TrimSpace(stdout.String()) != want {
+		t.Fatalf("printed %q, want %q", stdout.String(), want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	app.OpenBrowser = func(string) error { return errors.New("no browser") }
+	if err := app.Run([]string{"--config"}); err != nil {
+		t.Fatalf("--config must succeed without a browser: %v", err)
+	}
+	if !strings.Contains(stdout.String(), want) || !strings.Contains(stderr.String(), "failed to open browser") {
+		t.Fatalf("expected the URL and a warning, got stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 

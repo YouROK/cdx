@@ -112,6 +112,16 @@ func TestFetchRetriesBeforeStreaming(t *testing.T) {
 	}
 }
 
+func TestSysEnv(t *testing.T) {
+	t.Setenv("CDX_TEST_ENV", "value")
+	if got := NewSysAPI().Env("CDX_TEST_ENV"); got != "value" {
+		t.Fatalf("Env returned %q, want value", got)
+	}
+	if got := NewSysAPI().Env("CDX_TEST_ENV_MISSING"); got != "" {
+		t.Fatalf("Env returned %q for a missing variable", got)
+	}
+}
+
 func TestExecKillsChildProcessesOnTimeout(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "child.pid")
 	api := NewSysAPI()

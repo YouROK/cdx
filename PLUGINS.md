@@ -122,14 +122,15 @@ Isolated per-plugin **AES-256-GCM** encrypted bucket (`plugin_secrets:<id>`) in 
 ### 4.7. Lifecycle Hooks (`cdx.hooks`)
 * `cdx.hooks.on(hookName, priority, handler)`:
   * `session:before_turn`: inspect or mutate `{ session_id, workdir, model, preset, max_steps, system_prompt, summary, messages, tools }`; `max_steps` is `0` when the turn runs without a step limit.
-  * `tool:before_call`: inspect or mutate `{ session_id, workdir, tool, permission, arguments }`, or `throw new Error(...)` to block tool execution.
+  * `tool:before_call`: inspect or mutate `{ session_id, workdir, tool, permission, arguments }`, or `throw new Error(...)` to block tool execution. Set `payload.ask` to a [question envelope](#413-client-questions-cdxquestions) to ask the client without holding the plugin VM; the core asks and then runs `tool:decided`.
+  * `tool:decided`: receives `{ session_id, workdir, tool, permission, arguments, choice, text, cancelled, tag }` after the client answers. Act only when `tag` matches the question your plugin asked, then return `allowed: true` to run the tool; otherwise the core reports `error` (or a default message) to the model. Persist `once`, `session`, `daemon`, and `always` grants here. Without a deciding hook an asked tool call is denied.
   * `tool:after_call`: inspect or mutate `{ session_id, workdir, tool, arguments, output }`.
 
 ### 4.8. Event & RPC Bus (`cdx.bus`)
 * `cdx.bus.publish(topic, payload)`
 * `cdx.bus.subscribe(topic, handler)`
 * `cdx.bus.handle(topic, responder)`
-* `cdx.bus.request(topic, payload)` (e.g., `cdx.bus.request("client:prompt_user", { summary, tool, permission, options })`)
+* `cdx.bus.request(topic, payload)` (e.g., `cdx.bus.request("client:prompt_user", { summary, tool, permission, options })`). Prefer `cdx.questions.ask` for client questions: it works in worker VMs and does not hold the plugin control VM.
 
 ### 4.9. Core HTTP Router & Gin Middleware (`cdx.http`)
 * `cdx.http.get|post|put|delete|patch(path, handler)`
@@ -256,5 +257,14 @@ The legacy `window.CDXPluginPanels` registry is not used. New page panels are ES
 ### 4.12. System Capabilities (`cdx.sys`)
 * `cdx.sys.readFile(path)` / `cdx.sys.writeFile(path, content)` / `cdx.sys.stat(path)` / `cdx.sys.readDir(path)`
 * `cdx.sys.random(n)` - returns `n` cryptographically random bytes as a hex string (1-64), for tokens and nonces
+* `cdx.sys.env(name)` - returns the value of an environment variable of the daemon process
 * `cdx.sys.exec(command, workdir, timeoutMS)`
 * `cdx.sys.fetch(url, options, onLineCallback)`
+
+### 4.13. Client Questions (`cdx.questions`)
+* `cdx.questions.ask(question)` -> `{ choice, text, cancelled, reason }`.
+  * The core routes the question to the client of the running turn and waits for the answer. Without an interactive client the answer is cancelled with a reason.
+  * `question` is an envelope: `kind` (rendering hint such as `model` or `permission`), `title` (required), `body`, `details` (`[{ label, value }]`), `options` (`[{ id, label, description }]`), `default` (an option id), `text` (allow a free-text answer), and `tag` (asker identity: the host stamps it for `cdx.questions.ask`, a hook sets it for its own questions).
+  * The host sets `source` to `plugin:<id>`; a plugin cannot claim to be the core.
+  * Unlike `cdx.bus`, `cdx.questions` also works inside worker VMs, so tools marked with `cdx.inWorker` can ask the user.
+  * Validation rejects an empty title, duplicate option ids, a default that is not an option, more than 20 options or details, and a question with neither options nor free text.

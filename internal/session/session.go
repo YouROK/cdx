@@ -18,6 +18,7 @@ import (
 	"github.com/yourok/cdx/internal/bus"
 	"github.com/yourok/cdx/internal/logx"
 	"github.com/yourok/cdx/internal/plugin"
+	"github.com/yourok/cdx/internal/question"
 	"github.com/yourok/cdx/internal/store"
 )
 
@@ -91,7 +92,7 @@ type TurnRequest struct {
 
 // TurnEvent is emitted during a turn (text deltas, reasoning deltas, tool starts/results).
 type TurnEvent struct {
-	Type     string         `json:"type"` // "session", "text", "reasoning", "tool_start", "tool_end", "done"
+	Type     string         `json:"type"` // "waiting", "session", "text", "reasoning", "tool_start", "tool_end", "done"
 	Step     int            `json:"step,omitempty"`
 	Delta    string         `json:"delta,omitempty"`
 	Session  *Session       `json:"session,omitempty"`
@@ -119,7 +120,10 @@ type Orchestrator struct {
 	log      *logx.Scope
 	nowFn    func() time.Time
 
-	activeMu sync.Mutex
+	activeMu  sync.Mutex
+	resolveMu sync.Mutex
+
+	turns *turnQueue
 
 	liveMu sync.Mutex
 	live   map[string]*LiveTurn
@@ -136,6 +140,7 @@ func NewOrchestrator(st *store.Store, eb *bus.Bus, reg *plugin.Registry, logger 
 		registry: reg,
 		log:      logger.Tagged("Session"),
 		nowFn:    time.Now,
+		turns:    newTurnQueue(),
 		live:     make(map[string]*LiveTurn),
 	}
 }
@@ -205,24 +210,72 @@ func (o *Orchestrator) SetStepLimitMode(mode string) error {
 	return fmt.Errorf("step limit mode must be none, ask, or stop")
 }
 
-func (o *Orchestrator) askContinue(ctx context.Context, steps, budget, add int) bool {
+// askToolPermission asks the client about a tool call and runs the tool:decided hook.
+// The hook decides whether the answer allows the call; without it the call is denied.
+func (o *Orchestrator) askToolPermission(ctx context.Context, spec plugin.ToolSpec, sessionID, workdir, toolName string, args map[string]any, raw map[string]any) (bool, string, error) {
 	if o.bus == nil {
-		return false
+		return false, "permission denied", nil
 	}
-	answer, err := o.bus.Request(ctx, "session", "client:prompt_user", map[string]any{
-		"kind":      "max_steps",
-		"steps":     steps,
-		"max_steps": budget,
-		"add_steps": add,
-		"question":  fmt.Sprintf("Model made %d requests. Continue?", steps),
-		"options":   []string{"continue", "stop"},
+	ask, err := question.FromMap(raw)
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(ask.Kind) == "" {
+		ask.Kind = question.KindPermission
+	}
+	if strings.TrimSpace(ask.Source) == "" {
+		ask.Source = "plugin"
+	}
+	answer, err := question.Ask(ctx, ask)
+	if err != nil {
+		return false, "", err
+	}
+
+	payload := map[string]any{
+		"session_id": sessionID,
+		"workdir":    workdir,
+		"tool":       toolName,
+		"permission": spec.Permission,
+		"arguments":  args,
+		"choice":     answer.Choice,
+		"text":       answer.Text,
+		"cancelled":  answer.Cancelled,
+		"tag":        ask.Tag,
+	}
+	decision, decErr := o.bus.RunHook(ctx, "tool:decided", payload)
+	if decErr != nil {
+		if o.log != nil {
+			o.log.Warn("Tool decision hook failed: %v", decErr)
+		}
+		return false, "the tool decision failed", nil
+	}
+	if allowed, _ := decision["allowed"].(bool); allowed {
+		return true, "", nil
+	}
+	reason := "permission denied by user"
+	if text, _ := decision["error"].(string); strings.TrimSpace(text) != "" {
+		reason = text
+	}
+	return false, reason, nil
+}
+
+func (o *Orchestrator) askContinue(ctx context.Context, steps, add int) bool {
+	body := "Continue without a step limit?"
+	if add > 0 {
+		body = fmt.Sprintf("Continue with %d more steps?", add)
+	}
+	answer, err := question.Ask(ctx, question.Question{
+		Source:  question.SourceCore,
+		Kind:    question.KindStepLimit,
+		Title:   fmt.Sprintf("The model made %d requests without a final answer.", steps),
+		Body:    body,
+		Options: []question.Option{{ID: "continue", Label: "Continue"}, {ID: "stop", Label: "Stop"}},
+		Default: "continue",
 	})
 	if err != nil {
 		return false
 	}
-	m, _ := answer.(map[string]any)
-	allow, _ := m["allow"].(bool)
-	return allow
+	return !answer.Cancelled && answer.Choice == "continue"
 }
 
 // TempTTL returns the configured temporary session TTL or DefaultTempTTL (24h).
@@ -602,12 +655,29 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 			return nil, fmt.Errorf("session %q is not found", req.SessionID)
 		}
 	} else {
+		o.resolveMu.Lock()
 		sess, err = o.ResolveForWorkdir(req.Workdir, req.Mode)
+		o.resolveMu.Unlock()
 		if err != nil {
 			return nil, err
 		}
 	}
 	ctx = plugin.WithWorkdir(ctx, sess.Workdir)
+
+	release, err := o.turns.acquire(ctx, turnQueueKey(sess), func() {
+		if o.log != nil {
+			o.log.Debug("Turn waiting for session %s", sess.ID)
+		}
+		if onEvent != nil {
+			onEvent(TurnEvent{Type: "waiting", Session: sess})
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if release != nil {
+		defer release()
+	}
 
 	if onEvent != nil {
 		onEvent(TurnEvent{Type: "session", Session: sess})
@@ -827,6 +897,29 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 					if modArgs, ok := hookOut["arguments"].(map[string]any); ok {
 						args = modArgs
 					}
+					if askRaw, ok := hookOut["ask"].(map[string]any); ok && len(askRaw) > 0 {
+						allowed, reason, askErr := o.askToolPermission(ctx, spec, sess.ID, sess.Workdir, toolName, args, askRaw)
+						if askErr != nil {
+							history = append(history, Message{
+								Role:       "tool",
+								Name:       toolName,
+								ToolCallID: callID,
+								Content:    fmt.Sprintf("error: %v", askErr),
+								CreatedAt:  o.nowFn().Unix(),
+							})
+							continue
+						}
+						if !allowed {
+							history = append(history, Message{
+								Role:       "tool",
+								Name:       toolName,
+								ToolCallID: callID,
+								Content:    "error: " + reason,
+								CreatedAt:  o.nowFn().Unix(),
+							})
+							continue
+						}
+					}
 				}
 
 				emit(TurnEvent{Type: "tool_start", Step: steps, ToolName: toolName, ToolArgs: args})
@@ -888,7 +981,7 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 			break
 		}
 		next := o.MaxSteps()
-		if !o.askContinue(ctx, steps, budget, next) {
+		if !o.askContinue(ctx, steps, next) {
 			break
 		}
 		budget += next

@@ -15,6 +15,7 @@ import (
 
 	"github.com/yourok/cdx/internal/bus"
 	"github.com/yourok/cdx/internal/logx"
+	"github.com/yourok/cdx/internal/question"
 	"github.com/yourok/cdx/internal/router"
 	"github.com/yourok/cdx/internal/store"
 )
@@ -589,7 +590,33 @@ func TestUnmarkedProviderAndToolStayInControlVM(t *testing.T) {
 	}
 }
 
-func TestPermissionsAskOutsideWorkspace(t *testing.T) {
+// questionOptionIDs lists the option ids of a permission question.
+func questionOptionIDs(ask map[string]any) []string {
+	raw, _ := ask["options"].([]any)
+	ids := make([]string, 0, len(raw))
+	for _, item := range raw {
+		m, _ := item.(map[string]any)
+		if id, _ := m["id"].(string); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// questionDetails renders the labelled details of a question for assertions.
+func questionDetails(ask map[string]any) []string {
+	raw, _ := ask["details"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		m, _ := item.(map[string]any)
+		label, _ := m["label"].(string)
+		value, _ := m["value"].(string)
+		out = append(out, label+"="+value)
+	}
+	return out
+}
+
+func TestPermissionsReturnQuestions(t *testing.T) {
 	tmp := t.TempDir()
 	st, err := store.Open(store.Options{
 		DBPath:        filepath.Join(tmp, "cdx.db"),
@@ -618,142 +645,13 @@ func TestPermissionsAskOutsideWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("permissions storage: %v", err)
 	}
-	if err := ns.Set("config", map[string]any{
-		"read_policy":      "allow",
-		"edit_policy":      "allow",
-		"dangerous_policy": "allow",
-		"tool_rules":       map[string]any{},
-	}); err != nil {
-		t.Fatalf("set permissions config: %v", err)
-	}
 
-	prompts := 0
-	var lastOptions []string
-	var lastSummary string
-	var lastTitle string
-	var lastFields []string
-	eb.Handle("test", "client:prompt_user", func(_ context.Context, payload any) (any, error) {
-		prompts++
-		m, _ := payload.(map[string]any)
-		lastSummary, _ = m["summary"].(string)
-		lastTitle, _ = m["title"].(string)
-		lastFields = nil
-		if fields, ok := m["details"].([]any); ok {
-			for _, raw := range fields {
-				field, ok := raw.(map[string]any)
-				if !ok {
-					continue
-				}
-				label, _ := field["label"].(string)
-				value, _ := field["value"].(string)
-				lastFields = append(lastFields, label+"="+value)
-			}
-		}
-		lastOptions = nil
-		switch opts := m["options"].(type) {
-		case []string:
-			lastOptions = append(lastOptions, opts...)
-		case []any:
-			for _, raw := range opts {
-				if opt, ok := raw.(string); ok {
-					lastOptions = append(lastOptions, opt)
-				}
-			}
-		}
-		return map[string]any{"choice": "deny"}, nil
-	})
-
-	runHook := func(payload map[string]any) error {
-		_, err := eb.RunHook(context.Background(), "tool:before_call", payload)
-		return err
-	}
-
-	err = runHook(map[string]any{
-		"tool":       "read_file",
-		"permission": "read",
-		"workdir":    "/work",
-		"arguments":  map[string]any{"path": "/etc/passwd"},
-	})
-	if err == nil {
-		t.Fatal("outside read must be denied when the user denies the prompt")
-	}
-	if prompts != 1 || !strings.Contains(lastSummary, "outside the working folder") {
-		t.Fatalf("unexpected outside prompt: prompts=%d summary=%q", prompts, lastSummary)
-	}
-	if lastTitle != "Read a file outside the working folder" {
-		t.Fatalf("unexpected outside prompt title: %q", lastTitle)
-	}
-	joined := strings.Join(lastFields, " ")
-	if !strings.Contains(joined, "File=/etc/passwd") || !strings.Contains(joined, "Outside=/etc/passwd") {
-		t.Fatalf("the prompt must show the file and the outside path: %v", lastFields)
-	}
-	if !strings.Contains(joined, "Working folder=/work") {
-		t.Fatalf("the prompt must show the working folder: %v", lastFields)
-	}
-	if strings.Join(lastOptions, ",") != "once,deny" {
-		t.Fatalf("outside prompt must not offer remembered grants: %v", lastOptions)
-	}
-
-	if err := runHook(map[string]any{
-		"tool":       "read_file",
-		"permission": "read",
-		"workdir":    "/work",
-		"arguments":  map[string]any{"path": "/work/note.txt"},
-	}); err != nil {
-		t.Fatalf("inside read must be allowed: %v", err)
-	}
-	if prompts != 1 {
-		t.Fatalf("inside read must not prompt, prompts=%d", prompts)
-	}
-
-	if err := runHook(map[string]any{
-		"tool":       "shell",
-		"permission": "dangerous",
-		"workdir":    "/work",
-		"arguments":  map[string]any{"command": "ls -la 2>/dev/null"},
-	}); err != nil {
-		t.Fatalf("inside shell must be allowed: %v", err)
-	}
-	if prompts != 1 {
-		t.Fatalf("inside shell must not prompt, prompts=%d", prompts)
-	}
-
-	err = runHook(map[string]any{
-		"tool":       "shell",
-		"permission": "dangerous",
-		"workdir":    "/work",
-		"arguments":  map[string]any{"command": "rm -rf /"},
-	})
-	if err == nil {
-		t.Fatal("outside shell must be denied when the user denies the prompt")
-	}
-	if prompts != 2 || !strings.Contains(lastSummary, "outside the working folder") {
-		t.Fatalf("unexpected shell prompt: prompts=%d summary=%q", prompts, lastSummary)
-	}
-	if !strings.Contains(strings.Join(lastFields, " "), "Command=rm -rf /") {
-		t.Fatalf("the shell prompt must show the full command: %v", lastFields)
-	}
-
-	err = runHook(map[string]any{
-		"tool":       "shell",
-		"permission": "dangerous",
-		"workdir":    "/work",
-		"arguments":  map[string]any{"command": "cd /tmp && ls"},
-	})
-	if err == nil {
-		t.Fatal("cd outside workspace must be denied when the user denies the prompt")
-	}
-	if prompts != 3 {
-		t.Fatalf("cd outside workspace must prompt, prompts=%d", prompts)
-	}
-
-	// A plain permission prompt carries the readable action and its arguments.
 	storeConfig := func(overrides map[string]any) {
 		t.Helper()
 		cfg := map[string]any{
 			"read_policy":      "allow",
 			"edit_policy":      "allow",
-			"dangerous_policy": "ask",
+			"dangerous_policy": "allow",
 			"outside_policy":   "ask",
 			"tool_rules":       map[string]any{},
 		}
@@ -764,54 +662,196 @@ func TestPermissionsAskOutsideWorkspace(t *testing.T) {
 			t.Fatalf("set permissions config: %v", err)
 		}
 	}
-
 	storeConfig(nil)
-	err = runHook(map[string]any{
+
+	runHook := func(payload map[string]any) (map[string]any, error) {
+		return eb.RunHook(context.Background(), "tool:before_call", payload)
+	}
+	decide := func(payload map[string]any, choice string) map[string]any {
+		t.Helper()
+		payload["choice"] = choice
+		payload["cancelled"] = false
+		payload["tag"] = "permissions"
+		out, err := eb.RunHook(context.Background(), "tool:decided", payload)
+		if err != nil {
+			t.Fatalf("tool:decided failed: %v", err)
+		}
+		return out
+	}
+	askOf := func(out map[string]any) map[string]any {
+		t.Helper()
+		ask, _ := out["ask"].(map[string]any)
+		if ask == nil {
+			t.Fatalf("expected an ask question, got %+v", out)
+		}
+		return ask
+	}
+
+	// 1. An outside read returns a question instead of blocking the hook.
+	base := map[string]any{
+		"tool":       "read_file",
+		"permission": "read",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"path": "/etc/passwd"},
+	}
+	out, err := runHook(base)
+	if err != nil {
+		t.Fatalf("outside read must ask, got error %v", err)
+	}
+	ask := askOf(out)
+	if ask["kind"] != "permission" {
+		t.Fatalf("unexpected question kind: %v", ask["kind"])
+	}
+	if title, _ := ask["title"].(string); title != "Read a file outside the working folder" {
+		t.Fatalf("unexpected outside title: %q", title)
+	}
+	if got := strings.Join(questionOptionIDs(ask), ","); got != "once,deny" {
+		t.Fatalf("outside options = %q", got)
+	}
+	joined := strings.Join(questionDetails(ask), " ")
+	if !strings.Contains(joined, "File=/etc/passwd") || !strings.Contains(joined, "Outside=/etc/passwd") {
+		t.Fatalf("the question must show the file and the outside path: %v", joined)
+	}
+	if !strings.Contains(joined, "Working folder=/work") {
+		t.Fatalf("the question must show the working folder: %v", joined)
+	}
+	if decided := decide(map[string]any{
+		"tool":       "read_file",
+		"permission": "read",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"path": "/etc/passwd"},
+	}, "deny"); decided["allowed"] != false {
+		t.Fatalf("deny must not allow the tool: %+v", decided)
+	}
+
+	// 2. An inside read needs no question.
+	out, err = runHook(map[string]any{
+		"tool":       "read_file",
+		"permission": "read",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"path": "/work/note.txt"},
+	})
+	if err != nil {
+		t.Fatalf("inside read must be allowed: %v", err)
+	}
+	if _, ok := out["ask"]; ok {
+		t.Fatalf("inside read must not ask: %+v", out)
+	}
+
+	// 3. An inside shell is allowed by the dangerous policy.
+	out, err = runHook(map[string]any{
+		"tool":       "shell",
+		"permission": "dangerous",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"command": "ls -la 2>/dev/null"},
+	})
+	if err != nil {
+		t.Fatalf("inside shell must be allowed: %v", err)
+	}
+	if _, ok := out["ask"]; ok {
+		t.Fatalf("inside shell must not ask: %+v", out)
+	}
+
+	// 4. An outside shell asks and shows the full command.
+	out, err = runHook(map[string]any{
+		"tool":       "shell",
+		"permission": "dangerous",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"command": "rm -rf /"},
+	})
+	if err != nil {
+		t.Fatalf("outside shell must ask: %v", err)
+	}
+	ask = askOf(out)
+	if !strings.Contains(strings.Join(questionDetails(ask), " "), "Command=rm -rf /") {
+		t.Fatalf("the shell question must show the full command: %v", questionDetails(ask))
+	}
+
+	// 5. A cd outside the working folder asks.
+	if _, err := runHook(map[string]any{
+		"tool":       "shell",
+		"permission": "dangerous",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"command": "cd /tmp && ls"},
+	}); err != nil {
+		t.Fatalf("cd outside workspace must ask: %v", err)
+	}
+
+	// 6. The dangerous policy asks with the full option list.
+	storeConfig(map[string]any{"dangerous_policy": "ask"})
+	out, err = runHook(map[string]any{
 		"tool":       "shell",
 		"permission": "dangerous",
 		"workdir":    "/work",
 		"arguments":  map[string]any{"command": "make test"},
 	})
-	if err == nil {
-		t.Fatal("the dangerous policy must ask and the user denied")
+	if err != nil {
+		t.Fatalf("the dangerous policy must ask: %v", err)
 	}
-	if prompts != 4 || lastTitle != "Run a shell command" {
-		t.Fatalf("unexpected policy prompt: prompts=%d title=%q", prompts, lastTitle)
+	ask = askOf(out)
+	if title, _ := ask["title"].(string); title != "Run a shell command" {
+		t.Fatalf("unexpected policy title: %q", title)
 	}
-	if strings.Join(lastOptions, ",") != "once,session,daemon,always,deny" {
-		t.Fatalf("policy prompt options are wrong: %v", lastOptions)
+	if got := strings.Join(questionOptionIDs(ask), ","); got != "once,session,daemon,always,deny" {
+		t.Fatalf("policy options = %q", got)
 	}
-	if !strings.Contains(strings.Join(lastFields, " "), "Command=make test") {
-		t.Fatalf("the policy prompt must show the command: %v", lastFields)
+	if !strings.Contains(strings.Join(questionDetails(ask), " "), "Command=make test") {
+		t.Fatalf("the policy question must show the command: %v", questionDetails(ask))
 	}
 
-	// outside_policy=allow skips the outside prompt; the tool policy still applies.
-	storeConfig(map[string]any{"outside_policy": "allow", "read_policy": "allow"})
-	if err := runHook(map[string]any{
-		"tool":       "read_file",
-		"permission": "read",
+	// 7. "Always allow" persists the rule, and the next call skips the question.
+	if decided := decide(map[string]any{
+		"session_id": "ses_1",
+		"tool":       "shell",
+		"permission": "dangerous",
 		"workdir":    "/work",
-		"arguments":  map[string]any{"path": "/etc/passwd"},
-	}); err != nil {
-		t.Fatalf("outside read must pass when outside_policy is allow: %v", err)
+		"arguments":  map[string]any{"command": "make test"},
+	}, "always"); decided["allowed"] != true {
+		t.Fatalf("always must allow the tool: %+v", decided)
 	}
-	if prompts != 4 {
-		t.Fatalf("outside_policy=allow must not prompt, prompts=%d", prompts)
+	var cfg map[string]any
+	if ok, err := ns.Get("config", &cfg); err != nil || !ok {
+		t.Fatalf("read permissions config: ok=%v err=%v", ok, err)
+	}
+	rules, _ := cfg["tool_rules"].(map[string]any)
+	if rules["shell"] != "allow" {
+		t.Fatalf("always must persist the rule, got %+v", cfg)
+	}
+	out, err = runHook(map[string]any{
+		"tool":       "shell",
+		"permission": "dangerous",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"command": "make test"},
+	})
+	if err != nil {
+		t.Fatalf("the saved rule must allow the tool: %v", err)
+	}
+	if _, ok := out["ask"]; ok {
+		t.Fatalf("the saved rule must skip the question: %+v", out)
 	}
 
-	// outside_policy=deny blocks the action without asking.
-	storeConfig(map[string]any{"outside_policy": "deny"})
-	err = runHook(map[string]any{
+	// 8. outside_policy=allow skips the outside question; deny blocks without asking.
+	storeConfig(map[string]any{"outside_policy": "allow", "read_policy": "allow"})
+	out, err = runHook(map[string]any{
 		"tool":       "read_file",
 		"permission": "read",
 		"workdir":    "/work",
 		"arguments":  map[string]any{"path": "/etc/passwd"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "outside the working folder") {
-		t.Fatalf("outside_policy=deny must block, got %v", err)
+	if err != nil {
+		t.Fatalf("outside read must pass when outside_policy is allow: %v", err)
 	}
-	if prompts != 4 {
-		t.Fatalf("outside_policy=deny must not prompt, prompts=%d", prompts)
+	if _, ok := out["ask"]; ok {
+		t.Fatalf("outside_policy=allow must not ask: %+v", out)
+	}
+	storeConfig(map[string]any{"outside_policy": "deny"})
+	if _, err := runHook(map[string]any{
+		"tool":       "read_file",
+		"permission": "read",
+		"workdir":    "/work",
+		"arguments":  map[string]any{"path": "/etc/passwd"},
+	}); err == nil || !strings.Contains(err.Error(), "outside the working folder") {
+		t.Fatalf("outside_policy=deny must block, got %v", err)
 	}
 }
 
@@ -1219,5 +1259,175 @@ func TestContextHookSummarizesDroppedMessagesOnce(t *testing.T) {
 	}
 	if count := strings.Count(summary3, "message 0\n"); count != 1 {
 		t.Fatalf("message 0 was summarized %d times: %q", count, summary3)
+	}
+}
+
+type recordingQuestionAsker struct {
+	questions []question.Question
+	answer    question.Answer
+}
+
+func (a *recordingQuestionAsker) Ask(_ context.Context, q question.Question) (question.Answer, error) {
+	a.questions = append(a.questions, q)
+	return a.answer, nil
+}
+
+func TestQuestionsAskFromWorker(t *testing.T) {
+	tmp := t.TempDir()
+	st, err := store.Open(store.Options{
+		DBPath:        filepath.Join(tmp, "cdx.db"),
+		MasterKeyPath: filepath.Join(tmp, "master.key"),
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	reg := NewRegistry()
+	mgr := NewManager(RuntimeDependencies{
+		Store:    st,
+		Bus:      bus.New(),
+		Router:   router.New(),
+		Registry: reg,
+		Logger:   logx.New(),
+	})
+	defer mgr.CloseAll()
+
+	pluginsDir := filepath.Join(tmp, "plugins")
+	writePluginFiles(t, pluginsDir, "ask-plugin", `{
+		"id": "ask-plugin",
+		"name": "Ask Plugin",
+		"version": "1.0.0",
+		"description": "Asks the client from a worker VM",
+		"entry": "main.js",
+		"workers": 1
+	}`, `
+		function setup(cdx) {
+			cdx.tools.register({
+				name: "ask_user",
+				description: "Ask the user",
+				permission: "read",
+				input_schema: {
+					type: "object",
+					properties: { question: { type: "string" } },
+					required: ["question"]
+				}
+			}, cdx.inWorker(function(args) {
+				return cdx.questions.ask({
+					source: "core",
+					kind: "model",
+					title: args.question,
+					body: "Choose one",
+					options: [
+						{ id: "a", label: "Option A" },
+						{ id: "b", label: "Option B" }
+					],
+					default: "a",
+					text: true
+				});
+			}));
+		}
+	`)
+	if _, err := mgr.LoadPlugin(context.Background(), filepath.Join(pluginsDir, "ask-plugin")); err != nil {
+		t.Fatalf("load plugin: %v", err)
+	}
+
+	asker := &recordingQuestionAsker{answer: question.Answer{Choice: "b"}}
+	ctx := question.WithAsker(context.Background(), asker)
+	res, err := reg.CallTool(ctx, "ask_user", map[string]any{"question": "Which one?"})
+	if err != nil {
+		t.Fatalf("ask_user failed: %v", err)
+	}
+	out, _ := res.(map[string]any)
+	if out["choice"] != "b" {
+		t.Fatalf("unexpected answer: %+v", out)
+	}
+	if len(asker.questions) != 1 {
+		t.Fatalf("expected one question, got %d", len(asker.questions))
+	}
+	q := asker.questions[0]
+	if q.Source != "plugin:ask-plugin" {
+		t.Fatalf("source = %q, want plugin:ask-plugin", q.Source)
+	}
+	if q.Kind != question.KindModel || q.Title != "Which one?" || q.Default != "a" || !q.Text {
+		t.Fatalf("unexpected question envelope: %+v", q)
+	}
+	if len(q.Options) != 2 || q.Options[1].ID != "b" {
+		t.Fatalf("unexpected options: %+v", q.Options)
+	}
+}
+
+func TestAskPluginReturnsTheAnswer(t *testing.T) {
+	tmp := t.TempDir()
+	st, err := store.Open(store.Options{
+		DBPath:        filepath.Join(tmp, "cdx.db"),
+		MasterKeyPath: filepath.Join(tmp, "master.key"),
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	reg := NewRegistry()
+	mgr := NewManager(RuntimeDependencies{
+		Store:    st,
+		Bus:      bus.New(),
+		Router:   router.New(),
+		Registry: reg,
+		Logger:   logx.New(),
+	})
+	defer mgr.CloseAll()
+
+	if _, err := mgr.LoadPlugin(context.Background(), filepath.Join("..", "..", "plugins", "ask")); err != nil {
+		t.Fatalf("load ask plugin: %v", err)
+	}
+
+	asker := &recordingQuestionAsker{answer: question.Answer{Choice: "o2"}}
+	ctx := question.WithAsker(context.Background(), asker)
+	res, err := reg.CallTool(ctx, "ask_user", map[string]any{
+		"question":   "Which one?",
+		"options":    []any{"Option A", "Option B"},
+		"allow_text": true,
+	})
+	if err != nil {
+		t.Fatalf("ask_user failed: %v", err)
+	}
+	out, _ := res.(map[string]any)
+	if out["answer"] != "Option B" {
+		t.Fatalf("unexpected answer: %+v", out)
+	}
+	if len(asker.questions) != 1 {
+		t.Fatalf("expected one question, got %d", len(asker.questions))
+	}
+	q := asker.questions[0]
+	if q.Kind != question.KindModel || q.Title != "Which one?" || q.Source != "plugin:ask" || q.Tag != "ask" {
+		t.Fatalf("unexpected question envelope: %+v", q)
+	}
+	if len(q.Options) != 2 || q.Options[1].Label != "Option B" || !q.Text {
+		t.Fatalf("unexpected options: %+v", q.Options)
+	}
+
+	asker.answer = question.Answer{Text: "custom"}
+	res, err = reg.CallTool(ctx, "ask_user", map[string]any{
+		"question":   "Name it",
+		"options":    []any{"Option A"},
+		"allow_text": true,
+	})
+	if err != nil {
+		t.Fatalf("ask_user with text failed: %v", err)
+	}
+	out, _ = res.(map[string]any)
+	if out["answer"] != "custom" {
+		t.Fatalf("unexpected text answer: %+v", out)
+	}
+
+	asker.answer = question.Answer{Cancelled: true, Reason: "no interactive client"}
+	res, err = reg.CallTool(ctx, "ask_user", map[string]any{"question": "Anything?"})
+	if err != nil {
+		t.Fatalf("ask_user without options failed: %v", err)
+	}
+	out, _ = res.(map[string]any)
+	if out["cancelled"] != true {
+		t.Fatalf("unexpected cancelled answer: %+v", out)
 	}
 }

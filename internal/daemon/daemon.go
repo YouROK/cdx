@@ -4,6 +4,7 @@ package daemon
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/yourok/cdx/internal/logx"
 	"github.com/yourok/cdx/internal/paths"
 	"github.com/yourok/cdx/internal/plugin"
+	"github.com/yourok/cdx/internal/question"
 	"github.com/yourok/cdx/internal/router"
 	"github.com/yourok/cdx/internal/session"
 	"github.com/yourok/cdx/internal/store"
@@ -34,6 +36,29 @@ type Options struct {
 }
 
 type streamCtxKey struct{}
+
+// clientAsker routes a question to the IPC client of the running turn.
+type clientAsker struct{}
+
+func (clientAsker) Ask(ctx context.Context, q question.Question) (question.Answer, error) {
+	stream, ok := ctx.Value(streamCtxKey{}).(*ipc.ServerStream)
+	if !ok || stream == nil {
+		return question.Answer{Cancelled: true, Reason: "no interactive client attached"}, nil
+	}
+	raw, err := json.Marshal(q)
+	if err != nil {
+		return question.Answer{}, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return question.Answer{}, err
+	}
+	answer, err := stream.Prompt(payload)
+	if err != nil {
+		return question.Answer{}, err
+	}
+	return question.AnswerFromMap(answer), nil
+}
 
 // Daemon is the background microkernel process.
 type Daemon struct {
@@ -449,6 +474,7 @@ func readTailLines(path string, maxLines int) []string {
 
 func (d *Daemon) handleIPC(ctx context.Context, method string, payload map[string]any, stream *ipc.ServerStream) (any, error) {
 	ctx = context.WithValue(ctx, streamCtxKey{}, stream)
+	ctx = question.WithAsker(ctx, clientAsker{})
 
 	switch method {
 	case "status":

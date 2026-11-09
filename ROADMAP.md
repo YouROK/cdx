@@ -138,3 +138,37 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Publish a zip with the binary, the default plugins, and the install/uninstall scripts.
 - [x] Move the default system plugin directory to `/usr/share/cdx/plugins` and the Makefile prefix to `/usr`.
 - [x] Gate the release on `go vet`, `go test ./...`, and the frontend tests.
+
+## Stage 18: Settings Page Launcher
+- [x] Add `cdx --config`: start the daemon if needed, read its HTTP address over IPC, print the URL, and open the dashboard in the default browser.
+- [x] Map wildcard listeners to `127.0.0.1` and keep the command successful when no browser is available.
+- [x] Cover the URL mapping and the command with tests.
+
+## Stage 19: Remote Web Access
+- [x] Add `CDX_ALLOW_REMOTE_HOST` to skip the host and token checks for browser access from other machines.
+- [x] Bind the daemon to all interfaces when the variable is set and no explicit HTTP address is configured.
+- [x] Expose `cdx.sys.env` to plugins and cover remote access with daemon tests.
+
+## Stage 20: Concurrent Prompts
+- [x] Resolve the active session atomically, so simultaneous first prompts share one session.
+- [x] Serialize turns per session with a FIFO queue instead of corrupting history.
+- [x] Announce a waiting turn with a `waiting` event and show it in the CLI.
+- [x] Cover same-session serialization, arrival order, parallel sessions, cancellation, and stateless runs with tests.
+
+## Stage 21: Client Questions
+- [x] Add a validated question envelope and a per-turn asker in the core.
+- [x] Expose `cdx.questions.ask` to plugins, including worker VMs, with the host stamping the source.
+- [x] Route the step-limit prompt through the broker and render envelope questions in the CLI.
+- [x] Cover validation, asker routing, worker calls, and CLI rendering with tests.
+
+## Stage 22: Permission Questions
+- [x] Return an `ask` question from `tool:before_call` instead of blocking the plugin VM on the client.
+- [x] Add the `tool:decided` hook so a plugin persists grants and allows or denies the call.
+- [x] Move the permissions plugin to the generic question envelope.
+- [x] Cover the ask/decision path, denial without a decision hook, and the permissions plugin with tests.
+
+## Stage 23: Model Questions
+- [x] Add the `ask_user` tool plugin with optional choices and a free-text answer.
+- [x] Run the tool in worker VMs through `cdx.questions.ask` so the control VM stays free.
+- [x] Return the chosen label, the typed answer, or a cancelled flag to the model.
+- [x] Cover choices, free text, and cancellation with a plugin test.

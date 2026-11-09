@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,6 +34,8 @@ type App struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
+	// OpenBrowser opens a URL in the default browser; nil uses the system opener.
+	OpenBrowser func(url string) error
 }
 
 // NewApp creates a CLI application with standard I/O streams.
@@ -68,6 +72,9 @@ func (a *App) Run(args []string) error {
 		a.printUsage()
 		return nil
 
+	case "--config":
+		return a.runConfigCmd(args[1:])
+
 	case "daemon":
 		return a.runDaemonCmd(args[1:])
 
@@ -88,6 +95,37 @@ func (a *App) Run(args []string) error {
 	return a.runPromptCmd(args)
 }
 
+// runConfigCmd opens the dashboard settings page in the default browser.
+func (a *App) runConfigCmd(args []string) error {
+	if len(args) > 0 {
+		return errors.New("--config takes no arguments")
+	}
+	if err := a.ensureDaemon(); err != nil {
+		return err
+	}
+	res, err := ipc.Call(context.Background(), a.Layout.SocketPath, "status", nil, ipc.ClientCallbacks{})
+	if err != nil {
+		return fmt.Errorf("daemon status: %w", err)
+	}
+	status, _ := res.(map[string]any)
+	addr, _ := status["http_addr"].(string)
+	url := settingsURL(addr)
+	if url == "" {
+		return errors.New("the daemon has no HTTP interface")
+	}
+
+	fmt.Fprintln(a.Stdout, url)
+	opener := a.OpenBrowser
+	if opener == nil {
+		opener = openBrowser
+	}
+	if err := opener(url); err != nil {
+		// The browser is optional: the URL is already printed.
+		fmt.Fprintf(a.Stderr, "Warning: failed to open browser: %v\n", err)
+	}
+	return nil
+}
+
 func (a *App) runDaemonCmd(args []string) error {
 	sub := "status"
 	if len(args) > 0 {
@@ -96,10 +134,7 @@ func (a *App) runDaemonCmd(args []string) error {
 
 	switch sub {
 	case "run", "serve":
-		httpAddr := os.Getenv("CDX_HTTP_ADDR")
-		if httpAddr == "" {
-			httpAddr = "127.0.0.1:8787"
-		}
+		httpAddr := defaultHTTPAddr()
 		for i := 1; i < len(args); i++ {
 			if (args[i] == "--http" || args[i] == "--addr") && i+1 < len(args) {
 				httpAddr = args[i+1]
@@ -505,6 +540,10 @@ func (a *App) runPromptCmd(args []string) error {
 				return
 			}
 			switch ev["type"] {
+			case "waiting":
+				if spinner != nil {
+					spinner.SetText("waiting for the running turn in this session...")
+				}
 			case "session":
 				thinking.Reset()
 				if spinner != nil {
@@ -537,24 +576,19 @@ func (a *App) runPromptCmd(args []string) error {
 		},
 		OnPrompt: func(question map[string]any) (map[string]any, error) {
 			bell.ring()
-			if kind, _ := question["kind"].(string); kind == "max_steps" {
+			if _, ok := question["source"].(string); ok {
 				if quiet || jsonOut || !isTTYOut {
-					return map[string]any{"choice": "stop", "allow": false}, nil
+					return map[string]any{"cancelled": true, "reason": "non-interactive"}, nil
 				}
 				if spinner != nil {
 					spinner.Stop()
 					spinner = nil
 				}
-				choice := a.askContinuePrompt(question)
-				if spinner == nil && choice == "continue" {
-					thinking.Reset()
+				answer := a.askQuestionPrompt(question)
+				if isTTYOut && !noColor && !quiet && !jsonOut {
 					spinner = newProgressLine(true)
-					spinner.SetText("continuing...")
 				}
-				return map[string]any{
-					"choice": choice,
-					"allow":  choice == "continue",
-				}, nil
+				return answer, nil
 			}
 			if spinner != nil {
 				spinner.Stop()
@@ -633,30 +667,24 @@ func readPromptFile(stdin io.Reader, path string) (string, error) {
 	return string(data), nil
 }
 
-func (a *App) askContinuePrompt(question map[string]any) string {
+func (a *App) askQuestionPrompt(question map[string]any) map[string]any {
+	p := buildQuestionPrompt(question, terminalWidth())
 	inFile, _ := a.Stdin.(*os.File)
 	if !isTerminal(inFile) {
-		return "stop"
+		return map[string]any{"cancelled": true, "reason": "not interactive"}
 	}
-	steps, _ := question["steps"].(float64)
-	addSteps, _ := question["add_steps"].(float64)
-	fmt.Fprintf(a.Stderr, "\nThe model made %d requests without a final answer.\n", int(steps))
-	if addSteps <= 0 {
-		fmt.Fprint(a.Stderr, "Continue without a step limit? [Y/n]: ")
-	} else {
-		fmt.Fprintf(a.Stderr, "Continue with %d more steps? [Y/n]: ", int(addSteps))
+	fmt.Fprintln(a.Stderr)
+	for _, line := range p.lines {
+		fmt.Fprintln(a.Stderr, line)
 	}
+	fmt.Fprint(a.Stderr, p.prompt)
 
 	reader := bufio.NewReader(a.Stdin)
 	line, err := reader.ReadString('\n')
-	if err != nil && len(line) == 0 {
-		return "continue"
+	if err != nil && strings.TrimSpace(line) == "" {
+		return map[string]any{"cancelled": true, "reason": "no answer"}
 	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	if answer == "n" || answer == "no" {
-		return "stop"
-	}
-	return "continue"
+	return parseQuestionAnswer(line, p)
 }
 
 func (a *App) askPermissionPrompt(question map[string]any) string {
@@ -733,6 +761,56 @@ func (a *App) ensureDaemon() error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return errors.New("timed out waiting for daemon to start")
+}
+
+// defaultHTTPAddr returns the listener address for the daemon HTTP interface.
+// CDX_ALLOW_REMOTE_HOST opens the listener to the network when CDX_HTTP_ADDR is unset.
+func defaultHTTPAddr() string {
+	if addr := os.Getenv("CDX_HTTP_ADDR"); addr != "" {
+		return addr
+	}
+	if envEnabled("CDX_ALLOW_REMOTE_HOST") {
+		return "0.0.0.0:8787"
+	}
+	return "127.0.0.1:8787"
+}
+
+// envEnabled reports whether a boolean environment variable is set to a value
+// other than an explicit negative.
+func envEnabled(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+// settingsURL builds the dashboard URL from the daemon HTTP address.
+func settingsURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return ""
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
+}
+
+// openBrowser launches the system browser.
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
 }
 
 func thinkingTail(text string) string {
@@ -914,6 +992,7 @@ func (a *App) printUsage() {
   cdx plugins <list|reload>
   cdx models
   cdx api
+  cdx --config                   Open the settings page in the browser
 
 Session commands:
   cdx session new                 Create a persistent session in the current directory

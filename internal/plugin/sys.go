@@ -137,6 +137,11 @@ func (s *SysAPI) RandomHex(n int) (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+// Env returns the value of an environment variable.
+func (s *SysAPI) Env(name string) string {
+	return os.Getenv(name)
+}
+
 // Fetch performs an HTTP request. If onLine is non-nil, the response body is read line by line (useful for SSE streaming).
 func (s *SysAPI) Fetch(ctx context.Context, url string, opts map[string]any, onLine func(string) error) (map[string]any, error) {
 	method := "GET"

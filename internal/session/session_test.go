@@ -5,14 +5,32 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/yourok/cdx/internal/bus"
 	"github.com/yourok/cdx/internal/logx"
 	"github.com/yourok/cdx/internal/plugin"
+	"github.com/yourok/cdx/internal/question"
 	"github.com/yourok/cdx/internal/store"
 )
+
+// stepAnswers is a fake asker that returns scripted answers for client questions.
+type stepAnswers struct {
+	questions []question.Question
+	answers   []question.Answer
+}
+
+func (a *stepAnswers) Ask(_ context.Context, q question.Question) (question.Answer, error) {
+	a.questions = append(a.questions, q)
+	if len(a.answers) == 0 {
+		return question.Answer{Cancelled: true}, nil
+	}
+	answer := a.answers[0]
+	a.answers = a.answers[1:]
+	return answer, nil
+}
 
 func setupTestOrchestrator(t *testing.T) (*Orchestrator, *bus.Bus, *plugin.Registry, *time.Time) {
 	t.Helper()
@@ -444,7 +462,7 @@ func TestRunTurnWithoutStepLimit(t *testing.T) {
 // TestTurnLiftsStepLimitMidTurn covers switching the mode to no limit while a turn runs:
 // the running turn becomes unlimited instead of stopping at the budget.
 func TestTurnLiftsStepLimitMidTurn(t *testing.T) {
-	orch, eb, reg, _ := setupTestOrchestrator(t)
+	orch, _, reg, _ := setupTestOrchestrator(t)
 	if err := orch.SetMaxSteps(2); err != nil {
 		t.Fatalf("SetMaxSteps: %v", err)
 	}
@@ -473,13 +491,10 @@ func TestTurnLiftsStepLimitMidTurn(t *testing.T) {
 		},
 	})
 
-	prompts := 0
-	eb.Handle("test", "client:prompt_user", func(_ context.Context, _ any) (any, error) {
-		prompts++
-		return map[string]any{"allow": true}, nil
-	})
+	prompts := &stepAnswers{}
+	ctx := question.WithAsker(context.Background(), prompts)
 
-	res, err := orch.RunTurn(context.Background(), TurnRequest{
+	res, err := orch.RunTurn(ctx, TurnRequest{
 		Workdir: "/work",
 		Mode:    ModeAuto,
 		Prompt:  "run until done",
@@ -487,8 +502,8 @@ func TestTurnLiftsStepLimitMidTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunTurn failed: %v", err)
 	}
-	if prompts != 0 {
-		t.Fatalf("prompts = %d, want 0: a zero limit must not ask to extend", prompts)
+	if len(prompts.questions) != 0 {
+		t.Fatalf("prompts = %d, want 0: a zero limit must not ask to extend", len(prompts.questions))
 	}
 	if res.Steps != 5 || res.Content != "done" || res.StoppedReason != "" {
 		t.Fatalf("expected 5 steps and a final answer, got steps=%d content=%q reason=%q", res.Steps, res.Content, res.StoppedReason)
@@ -532,7 +547,7 @@ func TestRunTurnUsesConfiguredMaxSteps(t *testing.T) {
 }
 
 func TestTurnAsksToExtendStepBudget(t *testing.T) {
-	orch, eb, reg, _ := setupTestOrchestrator(t)
+	orch, _, reg, _ := setupTestOrchestrator(t)
 
 	if err := orch.SetMaxSteps(2); err != nil {
 		t.Fatalf("SetMaxSteps: %v", err)
@@ -552,20 +567,10 @@ func TestTurnAsksToExtendStepBudget(t *testing.T) {
 		},
 	})
 
-	prompts := 0
-	eb.Handle("test", "client:prompt_user", func(_ context.Context, payload any) (any, error) {
-		prompts++
-		question, _ := payload.(map[string]any)
-		if question["kind"] != "max_steps" {
-			return map[string]any{"allow": false}, nil
-		}
-		if add, _ := question["add_steps"].(int); add != 2 {
-			t.Errorf("add_steps = %v, want the configured budget 2", question["add_steps"])
-		}
-		return map[string]any{"allow": prompts == 1}, nil
-	})
+	asker := &stepAnswers{answers: []question.Answer{{Choice: "continue"}, {Choice: "stop"}}}
+	ctx := question.WithAsker(context.Background(), asker)
 
-	res, err := orch.RunTurn(context.Background(), TurnRequest{
+	res, err := orch.RunTurn(ctx, TurnRequest{
 		Workdir:  "/work",
 		Mode:     ModeAuto,
 		Prompt:   "loop",
@@ -574,8 +579,18 @@ func TestTurnAsksToExtendStepBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunTurn failed: %v", err)
 	}
-	if prompts != 2 {
-		t.Fatalf("prompts = %d, want 2", prompts)
+	if len(asker.questions) != 2 {
+		t.Fatalf("prompts = %d, want 2", len(asker.questions))
+	}
+	first := asker.questions[0]
+	if first.Kind != question.KindStepLimit || first.Source != question.SourceCore {
+		t.Fatalf("unexpected question envelope: %+v", first)
+	}
+	if !strings.Contains(first.Body, "2") {
+		t.Fatalf("question body does not mention the budget: %q", first.Body)
+	}
+	if first.Default != "continue" {
+		t.Fatalf("question default = %q, want continue", first.Default)
 	}
 	if res.Steps != 4 || res.StoppedReason != "max_steps" {
 		t.Fatalf("expected 4 steps after one extension, got steps=%d reason=%q", res.Steps, res.StoppedReason)
@@ -773,5 +788,127 @@ func TestTurnDropsUnansweredToolCalls(t *testing.T) {
 	}
 	if len(msgs) != 3 {
 		t.Fatalf("expected the repaired history plus the new prompt and answer, got %d: %+v", len(msgs), msgs)
+	}
+}
+
+func TestAskToolPermissionUsesDecisionHook(t *testing.T) {
+	orch, eb, _, _ := setupTestOrchestrator(t)
+
+	var decided map[string]any
+	eb.OnHook("permissions", "tool:decided", 10, func(_ context.Context, p map[string]any) (map[string]any, error) {
+		decided = p
+		p["allowed"] = p["choice"] != "deny"
+		return p, nil
+	})
+
+	asker := &stepAnswers{answers: []question.Answer{{Choice: "once"}}}
+	ctx := question.WithAsker(context.Background(), asker)
+	raw := map[string]any{
+		"kind":  "permission",
+		"title": "Run the tool?",
+		"options": []any{
+			map[string]any{"id": "once", "label": "Allow once"},
+			map[string]any{"id": "deny", "label": "Deny"},
+		},
+		"default": "once",
+	}
+
+	allowed, reason, err := orch.askToolPermission(ctx, plugin.ToolSpec{Name: "noop", Permission: "edit"}, "ses_1", "/work", "noop", map[string]any{"path": "x"}, raw)
+	if err != nil {
+		t.Fatalf("askToolPermission failed: %v", err)
+	}
+	if !allowed || reason != "" {
+		t.Fatalf("expected an allowed call, got allowed=%v reason=%q", allowed, reason)
+	}
+	if len(asker.questions) != 1 || asker.questions[0].Source != "plugin" {
+		t.Fatalf("unexpected question: %+v", asker.questions)
+	}
+	if decided == nil || decided["choice"] != "once" || decided["session_id"] != "ses_1" {
+		t.Fatalf("unexpected decision payload: %+v", decided)
+	}
+}
+
+func TestAskToolPermissionDeniedWithoutDecisionHook(t *testing.T) {
+	orch, _, _, _ := setupTestOrchestrator(t)
+
+	asker := &stepAnswers{answers: []question.Answer{{Choice: "once"}}}
+	ctx := question.WithAsker(context.Background(), asker)
+	raw := map[string]any{
+		"title":   "Run the tool?",
+		"options": []any{map[string]any{"id": "once", "label": "Allow once"}},
+	}
+
+	allowed, reason, err := orch.askToolPermission(ctx, plugin.ToolSpec{Name: "noop"}, "ses_1", "/work", "noop", nil, raw)
+	if err != nil {
+		t.Fatalf("askToolPermission failed: %v", err)
+	}
+	if allowed {
+		t.Fatal("a question without a tool:decided hook must deny the call")
+	}
+	if reason == "" {
+		t.Fatal("a denied call must explain why")
+	}
+}
+
+func TestToolCallDeniedByQuestionKeepsToolError(t *testing.T) {
+	orch, eb, reg, _ := setupTestOrchestrator(t)
+
+	if err := reg.RegisterTool(plugin.ToolSpec{
+		PluginID:    "test",
+		Name:        "noop",
+		Description: "Does nothing",
+		Permission:  "dangerous",
+		InputSchema: map[string]any{"type": "object"},
+	}); err != nil {
+		t.Fatalf("RegisterTool: %v", err)
+	}
+
+	eb.OnHook("permissions", "tool:before_call", 10, func(_ context.Context, p map[string]any) (map[string]any, error) {
+		p["ask"] = map[string]any{
+			"kind":    "permission",
+			"title":   "Run noop?",
+			"options": []any{map[string]any{"id": "deny", "label": "Deny"}},
+			"default": "deny",
+		}
+		return p, nil
+	})
+	eb.OnHook("permissions", "tool:decided", 10, func(_ context.Context, p map[string]any) (map[string]any, error) {
+		p["allowed"] = p["choice"] != "deny"
+		if p["allowed"] != true {
+			p["error"] = "permission denied by user for tool: noop"
+		}
+		return p, nil
+	})
+
+	step := 0
+	reg.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(_ context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "m1", Name: "m1", Default: true}}, nil
+		},
+		Complete: func(_ context.Context, req plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			step++
+			if step == 1 {
+				return &plugin.CompleteResponse{
+					ToolCalls: []map[string]any{{"id": "call_1", "name": "noop", "arguments": map[string]any{}}},
+				}, nil
+			}
+			last := req.Messages[len(req.Messages)-1]
+			content, _ := last["content"].(string)
+			return &plugin.CompleteResponse{Content: "tool said: " + content}, nil
+		},
+	})
+
+	asker := &stepAnswers{answers: []question.Answer{{Choice: "deny"}}}
+	ctx := question.WithAsker(context.Background(), asker)
+	res, err := orch.RunTurn(ctx, TurnRequest{Workdir: "/work", Mode: ModeAuto, Prompt: "try it"}, nil)
+	if err != nil {
+		t.Fatalf("RunTurn failed: %v", err)
+	}
+	if len(asker.questions) != 1 {
+		t.Fatalf("expected one question, got %d", len(asker.questions))
+	}
+	if res.Content != "tool said: error: permission denied by user for tool: noop" {
+		t.Fatalf("unexpected content: %q", res.Content)
 	}
 }

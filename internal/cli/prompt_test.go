@@ -158,3 +158,72 @@ func TestAskPermissionPromptReadsAnswer(t *testing.T) {
 		t.Fatalf("a closed input must deny, got %q", got)
 	}
 }
+
+func stepLimitQuestion() map[string]any {
+	return map[string]any{
+		"source": "core",
+		"kind":   "step_limit",
+		"title":  "The model made 3 requests without a final answer.",
+		"body":   "Continue with 2 more steps?",
+		"options": []any{
+			map[string]any{"id": "continue", "label": "Continue"},
+			map[string]any{"id": "stop", "label": "Stop"},
+		},
+		"default": "continue",
+	}
+}
+
+func TestQuestionPromptRendersStepLimit(t *testing.T) {
+	p := buildQuestionPrompt(stepLimitQuestion(), 80)
+	output := strings.Join(p.lines, "\n")
+	if !strings.Contains(output, "Continue with 2 more steps?") {
+		t.Fatalf("body is missing:\n%s", output)
+	}
+	if !strings.Contains(output, "[2] Stop") {
+		t.Fatalf("options are missing:\n%s", output)
+	}
+	if p.prompt != "Choose [1]: " {
+		t.Fatalf("prompt = %q, want the default option", p.prompt)
+	}
+}
+
+func TestQuestionAnswerParsing(t *testing.T) {
+	p := buildQuestionPrompt(stepLimitQuestion(), 80)
+	cases := map[string]string{
+		"":         "continue",
+		"1":        "continue",
+		"2":        "stop",
+		"n":        "stop",
+		"Continue": "continue",
+	}
+	for input, want := range cases {
+		answer := parseQuestionAnswer(input, p)
+		if answer["choice"] != want {
+			t.Fatalf("parseQuestionAnswer(%q) = %v, want %q", input, answer, want)
+		}
+	}
+}
+
+func TestQuestionPromptAcceptsFreeText(t *testing.T) {
+	p := buildQuestionPrompt(map[string]any{
+		"source": "plugin:ask",
+		"kind":   "model",
+		"title":  "What should the project be called?",
+		"text":   true,
+	}, 80)
+	if p.prompt != "Answer: " {
+		t.Fatalf("prompt = %q, want a free-text prompt", p.prompt)
+	}
+	answer := parseQuestionAnswer("  my-project  ", p)
+	if answer["text"] != "my-project" {
+		t.Fatalf("unexpected answer: %+v", answer)
+	}
+}
+
+func TestQuestionPromptRejectsUnknownOption(t *testing.T) {
+	p := buildQuestionPrompt(stepLimitQuestion(), 80)
+	answer := parseQuestionAnswer("maybe", p)
+	if answer["cancelled"] != true {
+		t.Fatalf("unexpected answer: %+v", answer)
+	}
+}
