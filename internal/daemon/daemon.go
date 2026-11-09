@@ -156,7 +156,6 @@ func New(ctx context.Context, opts Options) (*Daemon, error) {
 	}
 
 	d.registerCoreRoutes()
-	d.registerCoreBusHandlers()
 
 	if err := pm.LoadDirs(ctx, opts.Layout.PluginDirs); err != nil {
 		_ = st.Close()
@@ -235,21 +234,6 @@ func (d *Daemon) Stop() {
 			_ = os.Remove(d.opts.Layout.PIDPath)
 		}
 		close(d.stopCh)
-	})
-}
-
-func (d *Daemon) registerCoreBusHandlers() {
-	// Allow any plugin to prompt the connected client (e.g. CLI terminal) over the active IPC stream.
-	d.bus.Handle("core", "client:prompt_user", func(ctx context.Context, payload any) (any, error) {
-		stream, ok := ctx.Value(streamCtxKey{}).(*ipc.ServerStream)
-		if !ok || stream == nil {
-			return map[string]any{"allow": false, "reason": "no interactive client attached"}, nil
-		}
-		qMap, _ := payload.(map[string]any)
-		if qMap == nil {
-			qMap = map[string]any{"question": fmt.Sprint(payload)}
-		}
-		return stream.Prompt(qMap)
 	})
 }
 

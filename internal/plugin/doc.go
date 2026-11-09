@@ -30,7 +30,7 @@ var DocCDXObject = []DocEntry{
 	{Signature: "cdx.tools.register(spec, handler) / list()", Summary: "Register an LLM tool ({ name, description, permission, input_schema }, function(args) {}); wrap handler with cdx.inWorker to use a worker VM"},
 	{Signature: "cdx.providers.register({ listModels, complete }) / listModels()", Summary: "Register as an LLM provider; listModels returns available models, complete(req, emit) runs turns; wrap complete with cdx.inWorker to use a worker VM"},
 	{Signature: "cdx.hooks.on(hookName, priority, handler) / run(hookName, payload)", Summary: "Intercept lifecycle pipelines: session:before_turn, tool:before_call, tool:decided, tool:after_call"},
-	{Signature: "cdx.bus.publish|subscribe|handle|request(topic, payload)", Summary: "Communicate across plugins and core via events and 1-to-1 RPC (e.g. client:prompt_user)"},
+	{Signature: "cdx.bus.publish|subscribe|handle|request(topic, payload)", Summary: "Communicate across plugins and core via events and 1-to-1 RPC"},
 	{Signature: "cdx.questions.ask(question)", Summary: "Ask the active client a question ({ kind, title, body, details, options, default, text }) and return { choice, text, cancelled, reason }; available in worker VMs"},
 	{Signature: "cdx.agents.run({ prompt, preset, model, max_steps })", Summary: "Run a delegated turn in a fresh child session and return { session_id, content, steps, stopped_reason, usage }; available in worker VMs, depth 1"},
 	{Signature: "cdx.http.handle|get|post|put|delete|patch|use|group|static()", Summary: "Register HTTP endpoints, Gin middleware (ctx.bindJSON, ctx.next, ctx.abortWithJSON, ctx.set/get), and static assets"},

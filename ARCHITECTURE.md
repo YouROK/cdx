@@ -78,7 +78,6 @@ The bus connects the core and all plugins without coupling them together. It sup
    * `tool:before_call` - inspect tool arguments, block execution, or attach an `ask` question for the client.
    * `tool:decided` - after the client answers an `ask` question, allow or deny the tool call and record the choice.
    * `tool:after_call` - post-process or log tool output.
-   * `client:prompt_user` - ask the active client (CLI or Web) for confirmation or input.
 
 ### 3.4. Core HTTP Router (`internal/router`)
 * A foundational HTTP server and dynamic router built on top of `gin.Engine`.

@@ -30,17 +30,3 @@ func styleAction(text string) string {
 	}
 	return styleBold + text + styleReset
 }
-
-func styleLevel(level string) string {
-	if !styleEnabled() {
-		return "(" + level + ")"
-	}
-	color := styleDim
-	switch level {
-	case "dangerous":
-		color = styleRed
-	case "edit":
-		color = styleYellow
-	}
-	return color + "(" + level + ")" + styleReset
-}

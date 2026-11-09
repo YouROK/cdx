@@ -130,7 +130,9 @@ Isolated per-plugin **AES-256-GCM** encrypted bucket (`plugin_secrets:<id>`) in 
 * `cdx.bus.publish(topic, payload)`
 * `cdx.bus.subscribe(topic, handler)`
 * `cdx.bus.handle(topic, responder)`
-* `cdx.bus.request(topic, payload)` (e.g., `cdx.bus.request("client:prompt_user", { summary, tool, permission, options })`). Prefer `cdx.questions.ask` for client questions: it works in worker VMs and does not hold the plugin control VM.
+* `cdx.bus.request(topic, payload)`
+
+Client questions do not use the bus: call `cdx.questions.ask` instead. The old `client:prompt_user` topic is removed.
 
 ### 4.9. Core HTTP Router & Gin Middleware (`cdx.http`)
 * `cdx.http.get|post|put|delete|patch(path, handler)`

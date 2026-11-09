@@ -36,6 +36,8 @@ type App struct {
 	Stderr io.Writer
 	// OpenBrowser opens a URL in the default browser; nil uses the system opener.
 	OpenBrowser func(url string) error
+	// interactive lets tests answer questions without a real terminal.
+	interactive bool
 }
 
 // NewApp creates a CLI application with standard I/O streams.
@@ -579,33 +581,19 @@ func (a *App) runPromptCmd(args []string) error {
 			}
 		},
 		OnPrompt: func(question map[string]any) (map[string]any, error) {
-			bell.ring()
-			if _, ok := question["source"].(string); ok {
-				if quiet || jsonOut || !isTTYOut {
-					return map[string]any{"cancelled": true, "reason": "non-interactive"}, nil
-				}
-				if spinner != nil {
-					spinner.Stop()
-					spinner = nil
-				}
-				answer := a.askQuestionPrompt(question)
-				if isTTYOut && !noColor && !quiet && !jsonOut {
-					spinner = newProgressLine(true)
-				}
-				return answer, nil
+			if quiet || jsonOut || !a.canPrompt(isTTYOut) {
+				return map[string]any{"cancelled": true, "reason": "non-interactive"}, nil
 			}
+			bell.ring()
 			if spinner != nil {
 				spinner.Stop()
 				spinner = nil
 			}
-			choice := a.askPermissionPrompt(question)
+			answer := a.askQuestionPrompt(question)
 			if isTTYOut && !noColor && !quiet && !jsonOut {
 				spinner = newProgressLine(true)
 			}
-			return map[string]any{
-				"choice": choice,
-				"allow":  choice != "deny",
-			}, nil
+			return answer, nil
 		},
 	})
 	if spinner != nil {
@@ -673,11 +661,19 @@ func readPromptFile(stdin io.Reader, path string) (string, error) {
 
 func (a *App) askQuestionPrompt(question map[string]any) map[string]any {
 	p := buildQuestionPrompt(question, terminalWidth())
-	inFile, _ := a.Stdin.(*os.File)
-	if !isTerminal(inFile) {
+	if !a.canPrompt(true) {
 		return map[string]any{"cancelled": true, "reason": "not interactive"}
 	}
 	return a.readQuestionAnswer(p)
+}
+
+// canPrompt reports whether the client can show a question and read the answer.
+func (a *App) canPrompt(outTTY bool) bool {
+	if a.interactive {
+		return true
+	}
+	inFile, _ := a.Stdin.(*os.File)
+	return outTTY && isTerminal(inFile)
 }
 
 // readQuestionAnswer prints the question and repeats the prompt until the answer matches it.
@@ -700,22 +696,6 @@ func (a *App) readQuestionAnswer(p questionPrompt) map[string]any {
 		}
 		fmt.Fprintln(a.Stderr, "Unknown answer, try again.")
 	}
-}
-
-func (a *App) askPermissionPrompt(question map[string]any) string {
-	p := buildPermissionPrompt(question, terminalWidth())
-	fmt.Fprintln(a.Stderr)
-	for _, line := range p.lines {
-		fmt.Fprintln(a.Stderr, line)
-	}
-	fmt.Fprint(a.Stderr, p.prompt)
-
-	reader := bufio.NewReader(a.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil && strings.TrimSpace(line) == "" {
-		return "deny"
-	}
-	return parsePromptAnswer(line, p)
 }
 
 func (a *App) stopDaemon() error {

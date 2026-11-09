@@ -187,3 +187,9 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Add the `subagent` tool plugin and the built-in `subagent` preset.
 - [x] Key session permission grants by the root session so they cover the tree.
 - [x] Cover child sessions, depth limits, stateless rejection, the tool, and the preset with tests.
+
+## Stage 26: Single Question Path
+- [x] Remove the legacy `client:prompt_user` bus prompt and the old CLI permission renderer.
+- [x] Route every client question through `cdx.questions.ask` and the envelope renderer.
+- [x] Migrate the CLI end-to-end test to the question API.
+- [x] Update the plugin API reference, architecture, and plugin docs.

@@ -280,11 +280,16 @@ func TestCLIAndDaemonEndToEndWithPlugins(t *testing.T) {
 
 			cdx.hooks.on("tool:before_call", 10, function(payload) {
 				if (payload.permission === "dangerous") {
-					var ans = cdx.bus.request("client:prompt_user", {
-						question: "Run sensitive_op on " + payload.arguments.target + "?",
-						tool: payload.tool
+					var ans = cdx.questions.ask({
+						kind: "permission",
+						title: "Run sensitive_op on " + payload.arguments.target + "?",
+						options: [
+							{ id: "once", label: "once" },
+							{ id: "deny", label: "deny" }
+						],
+						default: "once"
 					});
-					if (!ans || !ans.allow) {
+					if (!ans || ans.cancelled || ans.choice !== "once") {
 						throw new Error("denied by user");
 					}
 				}
@@ -330,10 +335,11 @@ func TestCLIAndDaemonEndToEndWithPlugins(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	app := &App{
-		Layout: layout,
-		Stdin:  strings.NewReader("1\n"), // Choose [1] once in the permission menu.
-		Stdout: &stdout,
-		Stderr: &stderr,
+		Layout:      layout,
+		Stdin:       strings.NewReader("1\n"), // Choose [1] once in the permission menu.
+		Stdout:      &stdout,
+		Stderr:      &stderr,
+		interactive: true,
 	}
 
 	// 1. Check plugins list.
