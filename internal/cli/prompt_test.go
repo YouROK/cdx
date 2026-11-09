@@ -194,12 +194,15 @@ func TestQuestionAnswerParsing(t *testing.T) {
 		"1":        "continue",
 		"2":        "stop",
 		"n":        "stop",
+		"N":        "stop",
+		"Y":        "continue",
+		"YES":      "continue",
 		"Continue": "continue",
 	}
 	for input, want := range cases {
-		answer := parseQuestionAnswer(input, p)
-		if answer["choice"] != want {
-			t.Fatalf("parseQuestionAnswer(%q) = %v, want %q", input, answer, want)
+		answer, ok := parseQuestionAnswer(input, p)
+		if !ok || answer["choice"] != want {
+			t.Fatalf("parseQuestionAnswer(%q) = %v/%v, want %q", input, answer, ok, want)
 		}
 	}
 }
@@ -214,22 +217,21 @@ func TestQuestionPromptAcceptsFreeText(t *testing.T) {
 	if p.prompt != "Answer: " {
 		t.Fatalf("prompt = %q, want a free-text prompt", p.prompt)
 	}
-	answer := parseQuestionAnswer("  my-project  ", p)
-	if answer["text"] != "my-project" {
+	answer, ok := parseQuestionAnswer("  my-project  ", p)
+	if !ok || answer["text"] != "my-project" {
 		t.Fatalf("unexpected answer: %+v", answer)
 	}
 }
 
-func TestQuestionPromptUnknownUsesDefault(t *testing.T) {
+func TestQuestionPromptRejectsUnknownAnswer(t *testing.T) {
 	p := buildQuestionPrompt(stepLimitQuestion(), 80)
-	answer := parseQuestionAnswer("maybe", p)
-	if answer["choice"] != "continue" {
-		t.Fatalf("unexpected answer: %+v", answer)
+	if _, ok := parseQuestionAnswer("maybe", p); ok {
+		t.Fatal("an unknown answer must ask again")
 	}
 }
 
-func TestQuestionPromptPermissionUnknownDenies(t *testing.T) {
-	p := buildQuestionPrompt(map[string]any{
+func permissionOptionsQuestion() map[string]any {
+	return map[string]any{
 		"source": "plugin",
 		"kind":   "permission",
 		"title":  "Run the command?",
@@ -238,10 +240,44 @@ func TestQuestionPromptPermissionUnknownDenies(t *testing.T) {
 			map[string]any{"id": "deny", "label": "Deny"},
 		},
 		"default": "once",
-	}, 80)
-	answer := parseQuestionAnswer("maybe", p)
+	}
+}
+
+func TestQuestionPromptPermissionIsCaseInsensitive(t *testing.T) {
+	p := buildQuestionPrompt(permissionOptionsQuestion(), 80)
+	if answer, ok := parseQuestionAnswer("Y", p); !ok || answer["choice"] != "once" {
+		t.Fatalf("Y must allow once, got %+v", answer)
+	}
+	if answer, ok := parseQuestionAnswer("n", p); !ok || answer["choice"] != "deny" {
+		t.Fatalf("n must deny, got %+v", answer)
+	}
+	if _, ok := parseQuestionAnswer("н", p); ok {
+		t.Fatal("a Cyrillic letter is not an answer")
+	}
+}
+
+func TestReadQuestionAnswerRetriesUntilValid(t *testing.T) {
+	var stderr bytes.Buffer
+	app := &App{Stdin: strings.NewReader("н\nN\n"), Stderr: &stderr}
+	p := buildQuestionPrompt(permissionOptionsQuestion(), 80)
+
+	answer := app.readQuestionAnswer(p)
 	if answer["choice"] != "deny" {
-		t.Fatalf("a typo must deny a permission, got %+v", answer)
+		t.Fatalf("unexpected answer: %+v", answer)
+	}
+	if !strings.Contains(stderr.String(), "Unknown answer") {
+		t.Fatalf("the retry hint is missing:\n%s", stderr.String())
+	}
+}
+
+func TestReadQuestionAnswerUsesDefaultAfterRetry(t *testing.T) {
+	var stderr bytes.Buffer
+	app := &App{Stdin: strings.NewReader("maybe\n\n"), Stderr: &stderr}
+	p := buildQuestionPrompt(stepLimitQuestion(), 80)
+
+	answer := app.readQuestionAnswer(p)
+	if answer["choice"] != "continue" {
+		t.Fatalf("unexpected answer: %+v", answer)
 	}
 }
 
@@ -259,7 +295,8 @@ func TestQuestionPromptUsesFirstOptionAsDefault(t *testing.T) {
 	if p.prompt != "Choose [1]: " {
 		t.Fatalf("prompt = %q, want the first option as default", p.prompt)
 	}
-	if answer := parseQuestionAnswer("", p); answer["choice"] != "o1" {
+	answer, ok := parseQuestionAnswer("", p)
+	if !ok || answer["choice"] != "o1" {
 		t.Fatalf("Enter must pick the first option, got %+v", answer)
 	}
 }
@@ -271,7 +308,8 @@ func TestQuestionPromptTextOnlyCancelsOnEmpty(t *testing.T) {
 		"title":  "Name it",
 		"text":   true,
 	}, 80)
-	if answer := parseQuestionAnswer("", p); answer["cancelled"] != true {
+	answer, ok := parseQuestionAnswer("", p)
+	if !ok || answer["cancelled"] != true {
 		t.Fatalf("empty text answer must cancel, got %+v", answer)
 	}
 }

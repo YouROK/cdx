@@ -267,7 +267,7 @@ The legacy `window.CDXPluginPanels` registry is not used. New page panels are ES
   * `question` is an envelope: `kind` (rendering hint such as `model` or `permission`), `title` (required), `body`, `details` (`[{ label, value }]`), `options` (`[{ id, label, description }]`), `default` (an option id), `text` (allow a free-text answer), and `tag` (asker identity: the host stamps it for `cdx.questions.ask`, a hook sets it for its own questions).
   * The host sets `source` to `plugin:<id>`; a plugin cannot claim to be the core.
   * Unlike `cdx.bus`, `cdx.questions` also works inside worker VMs, so tools marked with `cdx.inWorker` can ask the user.
-  * When options are present the client resolves a default (the given one, otherwise the first option), so Enter accepts it. Free text without an option cancels on an empty line, and non-interactive clients answer `cancelled` without showing the question.
+  * When options are present the client resolves a default (the given one, otherwise the first option), so Enter accepts it. An unrecognized answer repeats the question until it matches an option or the free text; `y`/`n` work in any case. Free text without an option cancels on an empty line, and non-interactive clients answer `cancelled` without showing the question.
   * Validation rejects an empty title, duplicate option ids, a default that is not an option, more than 20 options or details, and a question with neither options nor free text.
 
 ### 4.14. Subagents (`cdx.agents`)

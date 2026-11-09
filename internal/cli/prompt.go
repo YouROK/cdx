@@ -285,7 +285,6 @@ type questionPrompt struct {
 	options   []question.Option
 	def       string
 	allowText bool
-	strict    bool
 	prompt    string
 }
 
@@ -301,7 +300,6 @@ func buildQuestionPrompt(raw map[string]any, width int) questionPrompt {
 	p := questionPrompt{
 		def:       questionStringField(raw, "default"),
 		allowText: questionBoolField(raw, "text"),
-		strict:    kind == question.KindPermission,
 	}
 
 	switch kind {
@@ -371,53 +369,45 @@ func buildQuestionPrompt(raw map[string]any, width int) questionPrompt {
 }
 
 // parseQuestionAnswer maps a typed line to a question answer.
-func parseQuestionAnswer(answer string, p questionPrompt) map[string]any {
+// The second result is false when the line does not match an answer and the client should ask again.
+func parseQuestionAnswer(answer string, p questionPrompt) (map[string]any, bool) {
 	text := strings.TrimSpace(answer)
 	if text == "" {
 		if p.def != "" {
-			return map[string]any{"choice": p.def}
+			return map[string]any{"choice": p.def}, true
 		}
-		return map[string]any{"cancelled": true, "reason": "no answer"}
+		return map[string]any{"cancelled": true, "reason": "no answer"}, true
 	}
 
 	lower := strings.ToLower(text)
-	switch lower {
-	case "y", "yes":
+	if lower == "y" || lower == "yes" {
 		if id, ok := questionOptionID(p.options, "continue"); ok {
-			return map[string]any{"choice": id}
+			return map[string]any{"choice": id}, true
 		}
 		if id, ok := questionOptionID(p.options, "once"); ok {
-			return map[string]any{"choice": id}
+			return map[string]any{"choice": id}, true
 		}
-	case "n", "no":
+	}
+	if lower == "n" || lower == "no" {
 		if id, ok := questionOptionID(p.options, "stop"); ok {
-			return map[string]any{"choice": id}
+			return map[string]any{"choice": id}, true
 		}
 		if id, ok := questionOptionID(p.options, "deny"); ok {
-			return map[string]any{"choice": id}
+			return map[string]any{"choice": id}, true
 		}
 	}
 	if n, err := strconv.Atoi(lower); err == nil && n >= 1 && n <= len(p.options) {
-		return map[string]any{"choice": p.options[n-1].ID}
+		return map[string]any{"choice": p.options[n-1].ID}, true
 	}
 	for _, opt := range p.options {
 		if strings.EqualFold(opt.ID, text) || strings.EqualFold(opt.Label, text) {
-			return map[string]any{"choice": opt.ID}
+			return map[string]any{"choice": opt.ID}, true
 		}
 	}
 	if p.allowText {
-		return map[string]any{"text": text}
+		return map[string]any{"text": text}, true
 	}
-	if p.strict {
-		// A permission prompt must not fail open on a typo.
-		if id, ok := questionOptionID(p.options, "deny"); ok {
-			return map[string]any{"choice": id}
-		}
-	}
-	if p.def != "" {
-		return map[string]any{"choice": p.def}
-	}
-	return map[string]any{"cancelled": true, "reason": "unrecognized answer"}
+	return nil, false
 }
 
 func questionStringField(raw map[string]any, key string) string {

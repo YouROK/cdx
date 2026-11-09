@@ -183,7 +183,8 @@ and a separate option decides what happens outside the working folder.
 The model can also ask its own question when a request is ambiguous. Those
 prompts are labelled "The agent asks:" and never carry permission grants, so
 they cannot be confused with a system confirmation. Enter picks the
-recommended option, or the first one when none is marked.
+recommended option, or the first one when none is marked. An unrecognized
+answer repeats the question; `y`/`n` work in any case.
 
 The model can delegate a self-contained task with the `subagent` tool. The
 child works in the same directory in its own session, does not see the current

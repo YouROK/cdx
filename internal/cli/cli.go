@@ -677,18 +677,29 @@ func (a *App) askQuestionPrompt(question map[string]any) map[string]any {
 	if !isTerminal(inFile) {
 		return map[string]any{"cancelled": true, "reason": "not interactive"}
 	}
+	return a.readQuestionAnswer(p)
+}
+
+// readQuestionAnswer prints the question and repeats the prompt until the answer matches it.
+func (a *App) readQuestionAnswer(p questionPrompt) map[string]any {
 	fmt.Fprintln(a.Stderr)
 	for _, line := range p.lines {
 		fmt.Fprintln(a.Stderr, line)
 	}
-	fmt.Fprint(a.Stderr, p.prompt)
 
 	reader := bufio.NewReader(a.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil && strings.TrimSpace(line) == "" {
-		return map[string]any{"cancelled": true, "reason": "no answer"}
+	for {
+		fmt.Fprint(a.Stderr, p.prompt)
+		line, err := reader.ReadString('\n')
+		if err != nil && strings.TrimSpace(line) == "" {
+			return map[string]any{"cancelled": true, "reason": "no answer"}
+		}
+		answer, ok := parseQuestionAnswer(line, p)
+		if ok {
+			return answer
+		}
+		fmt.Fprintln(a.Stderr, "Unknown answer, try again.")
 	}
-	return parseQuestionAnswer(line, p)
 }
 
 func (a *App) askPermissionPrompt(question map[string]any) string {
