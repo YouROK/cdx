@@ -26,6 +26,7 @@ import (
 const (
 	KindTemp       = "temp"
 	KindPersistent = "persistent"
+	KindSubagent   = "subagent"
 	KindNone       = "none"
 )
 
@@ -59,7 +60,8 @@ type Message struct {
 type Session struct {
 	ID            string `json:"id"`
 	Workdir       string `json:"workdir"`
-	Kind          string `json:"kind"` // "temp" or "persistent"
+	Kind          string `json:"kind"` // "temp", "persistent", or "subagent"
+	Title         string `json:"title,omitempty"`
 	Model         string `json:"model,omitempty"`
 	Summary       string `json:"summary,omitempty"`
 	StoppedReason string `json:"stopped_reason,omitempty"`
@@ -137,7 +139,7 @@ func NewOrchestrator(st *store.Store, eb *bus.Bus, reg *plugin.Registry, logger 
 	if logger == nil {
 		logger = logx.New()
 	}
-	return &Orchestrator{
+	o := &Orchestrator{
 		store:    st,
 		bus:      eb,
 		registry: reg,
@@ -145,6 +147,56 @@ func NewOrchestrator(st *store.Store, eb *bus.Bus, reg *plugin.Registry, logger 
 		nowFn:    time.Now,
 		turns:    newTurnQueue(),
 		live:     make(map[string]*LiveTurn),
+	}
+	o.backfillTitles()
+	return o
+}
+
+// backfillTitles fills empty session titles from the first user message.
+func (o *Orchestrator) backfillTitles() {
+	var pending []Session
+	err := o.store.DB().View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(store.BucketSessions))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(_, v []byte) error {
+			var s Session
+			if json.Unmarshal(v, &s) == nil && s.Title == "" {
+				pending = append(pending, s)
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		o.log.Warn("Failed to scan session titles: %v", err)
+		return
+	}
+	updated := 0
+	for _, s := range pending {
+		messages, err := o.GetMessages(s.ID)
+		if err != nil {
+			continue
+		}
+		for _, message := range messages {
+			if message.Role != "user" {
+				continue
+			}
+			title := sessionTitle(message.Content)
+			if title == "" {
+				continue
+			}
+			s.Title = title
+			if err := o.saveSession(&s); err != nil {
+				o.log.Warn("Failed to save session title: %v", err)
+			} else {
+				updated++
+			}
+			break
+		}
+	}
+	if updated > 0 {
+		o.log.Info("Backfilled %d session titles", updated)
 	}
 }
 
@@ -552,9 +604,30 @@ func (o *Orchestrator) ListSessions() ([]Session, error) {
 	now := o.nowFn()
 	ttl := o.TempTTL()
 
+	all, expiredIDs, err := o.loadSessions(now, ttl)
+	if err != nil {
+		return nil, err
+	}
+	if len(expiredIDs) > 0 {
+		for _, id := range expiredIDs {
+			_ = o.DeleteSession(id)
+		}
+		all, _, err = o.loadSessions(now, ttl)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].UpdatedAt > all[j].UpdatedAt
+	})
+	return all, nil
+}
+
+// loadSessions reads the sessions bucket and separates expired temp sessions.
+func (o *Orchestrator) loadSessions(now time.Time, ttl time.Duration) ([]Session, []string, error) {
 	var all []Session
 	var expiredIDs []string
-
 	err := o.store.DB().View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(store.BucketSessions))
 		if b == nil {
@@ -573,33 +646,68 @@ func (o *Orchestrator) ListSessions() ([]Session, error) {
 			return nil
 		})
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	for _, id := range expiredIDs {
-		_ = o.DeleteSession(id)
-	}
-
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].UpdatedAt > all[j].UpdatedAt
-	})
-	return all, nil
+	return all, expiredIDs, err
 }
 
 // DeleteSession removes a session and its message history from BoltDB.
 func (o *Orchestrator) DeleteSession(id string) error {
+	if id == "" {
+		return nil
+	}
+	ids := o.sessionTree(id)
 	err := o.store.DB().Update(func(tx *bolt.Tx) error {
-		if b := tx.Bucket([]byte(store.BucketSessions)); b != nil {
-			_ = b.Delete([]byte(id))
-		}
-		if b := tx.Bucket([]byte(store.BucketMessages)); b != nil {
-			_ = b.Delete([]byte(id))
+		sessions := tx.Bucket([]byte(store.BucketSessions))
+		messages := tx.Bucket([]byte(store.BucketMessages))
+		for _, sessionID := range ids {
+			if sessions != nil {
+				_ = sessions.Delete([]byte(sessionID))
+			}
+			if messages != nil {
+				_ = messages.Delete([]byte(sessionID))
+			}
 		}
 		return nil
 	})
-	_ = o.removeActiveSession(id)
+	for _, sessionID := range ids {
+		_ = o.removeActiveSession(sessionID)
+	}
 	return err
+}
+
+// sessionTree returns the session and all its descendants.
+func (o *Orchestrator) sessionTree(root string) []string {
+	children := map[string][]string{}
+	_ = o.store.DB().View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(store.BucketSessions))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(_, v []byte) error {
+			var s Session
+			if json.Unmarshal(v, &s) != nil {
+				return nil
+			}
+			if s.ParentID != "" {
+				children[s.ParentID] = append(children[s.ParentID], s.ID)
+			}
+			return nil
+		})
+	})
+
+	out := make([]string, 0, 1)
+	seen := map[string]bool{}
+	queue := []string{root}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if seen[current] {
+			continue
+		}
+		seen[current] = true
+		out = append(out, current)
+		queue = append(queue, children[current]...)
+	}
+	return out
 }
 
 // GetMessages returns the stored message list for sessionID.
@@ -751,6 +859,9 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 		Content:   req.Prompt,
 		CreatedAt: now,
 	})
+	if sess.Title == "" {
+		sess.Title = sessionTitle(req.Prompt)
+	}
 
 	// Persist partial progress, so an interrupted turn keeps what it did.
 	save := func() {
@@ -1067,7 +1178,7 @@ func (o *Orchestrator) RunChild(ctx context.Context, req TurnRequest) (*TurnResu
 	child := &Session{
 		ID:        newSessionID(),
 		Workdir:   parentSess.Workdir,
-		Kind:      KindTemp,
+		Kind:      KindSubagent,
 		Model:     parentSess.Model,
 		ParentID:  parentSess.ID,
 		RootID:    rootID,
@@ -1310,6 +1421,20 @@ func normalizeMode(m string) string {
 	default:
 		return ModeAuto
 	}
+}
+
+// sessionTitle builds a short single-line title from the first prompt.
+func sessionTitle(prompt string) string {
+	const limit = 80
+	text := strings.Join(strings.Fields(prompt), " ")
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) > limit {
+		return string(runes[:limit]) + "..."
+	}
+	return text
 }
 
 func normalizeKind(k string) (string, error) {

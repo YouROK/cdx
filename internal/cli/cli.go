@@ -269,7 +269,14 @@ func (a *App) runSessionCmd(args []string) error {
 			if parent, _ := s["parent_id"].(string); parent != "" {
 				suffix = "  parent=" + parent
 			}
-			fmt.Fprintf(a.Stdout, "%s %s  [%s]  msgs=%v  dir=%s%s\n", marker, s["id"], s["kind"], s["message_count"], s["workdir"], suffix)
+			title, _ := s["title"].(string)
+			if title == "" {
+				title = "(untitled)"
+			}
+			if runes := []rune(title); len(runes) > 60 {
+				title = string(runes[:60]) + "..."
+			}
+			fmt.Fprintf(a.Stdout, "%s %s  [%s]  msgs=%v  dir=%s  id=%s%s\n", marker, title, s["kind"], s["message_count"], s["workdir"], s["id"], suffix)
 		}
 		return nil
 

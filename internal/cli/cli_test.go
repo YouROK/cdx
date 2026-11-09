@@ -401,7 +401,7 @@ func TestCLIAndDaemonEndToEndWithPlugins(t *testing.T) {
 	if err := app.Run([]string{"session", "list"}); err != nil {
 		t.Fatalf("session list failed: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "* ses_") || !strings.Contains(stdout.String(), "[persistent]") {
+	if !strings.Contains(stdout.String(), "* (untitled)") || !strings.Contains(stdout.String(), "[persistent]") || !strings.Contains(stdout.String(), "id=ses_") {
 		t.Fatalf("expected active persistent session in list: %s", stdout.String())
 	}
 

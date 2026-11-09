@@ -193,3 +193,15 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Route every client question through `cdx.questions.ask` and the envelope renderer.
 - [x] Migrate the CLI end-to-end test to the question API.
 - [x] Update the plugin API reference, architecture, and plugin docs.
+
+## Stage 27: Parallel Subagents
+- [x] Make worker calls take a free VM or wait in the queue instead of failing after 5 seconds.
+- [x] Raise the default provider, tool, and subagent pools to 8 workers.
+- [x] Add `cdx.agents.runMany` and up to 8 parallel tasks to the `subagent` tool.
+- [x] Cover pool queueing, parallel child turns, and the batch tool with tests.
+
+## Stage 28: Session Identity and Sub-session UI
+- [x] Add the `subagent` session kind, bound to the parent and exempt from the temp TTL.
+- [x] Store a short title from the first prompt and show it in the CLI and web session lists.
+- [x] Group sub-sessions under the parent with a spoiler in the web UI.
+- [x] Cascade session deletion to all children.

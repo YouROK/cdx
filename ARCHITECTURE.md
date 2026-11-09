@@ -99,7 +99,7 @@ The bus connects the core and all plugins without coupling them together. It sup
 * Discovers plugins from configured directories (`/usr/share/cdx/plugins`, `~/.local/share/cdx/plugins`).
 * Each plugin lives in its own folder with a minimal `manifest.json` (`id`, `name`, `version`, `description`, `entry`) and its JS/web files.
 * Runs each plugin in a dedicated `goja` VM goroutine (thread-safe command channel).
-* Supports an optional worker pool (`workers` in `manifest.json`): functions explicitly marked with `cdx.inWorker(fn)`, currently provider `complete` and tool handlers, execute in isolated worker VMs, each on its own goroutine, while the control VM keeps serving HTTP routes, hooks, UI, and status requests. Worker VMs share `storage`/`secrets` but not JS memory, so shared mutable state must live in storage.
+* Supports an optional worker pool (`workers` in `manifest.json`): functions explicitly marked with `cdx.inWorker(fn)`, currently provider `complete` and tool handlers, execute in isolated worker VMs, each on its own goroutine, while the control VM keeps serving HTTP routes, hooks, UI, and status requests. A call takes a free worker or waits in the queue, so a busy pool delays a call instead of failing it. Worker VMs share `storage`/`secrets` but not JS memory, so shared mutable state must live in storage. The default providers, tools-local, and subagent plugins use 8 workers each.
 * Exposes the `cdx` host object to JS plugins:
   * `cdx.log` - scoped logger (`[Plugin:<id>]`).
   * `cdx.storage` - isolated plain key-value store (`get`, `set`, `delete`, `list`).
@@ -111,7 +111,7 @@ The bus connects the core and all plugins without coupling them together. It sup
   * `cdx.hooks` - register lifecycle interceptors (`on(hookName, priority, handler)`).
   * `cdx.bus` - publish events and send RPC requests.
   * `cdx.questions` - ask the active client a question through the core broker; works in worker VMs.
-  * `cdx.agents` - run a delegated turn in a fresh child session and wait for its result; works in worker VMs.
+  * `cdx.agents` - run one delegated turn, or up to 8 in parallel, in fresh child sessions and wait for the results; works in worker VMs.
   * `cdx.sys` - low-level host capabilities (HTTP fetch/streaming, file I/O, cryptographic random bytes, process execution).
 
 ### 3.7. Session Orchestrator (`internal/session`)
@@ -126,7 +126,9 @@ The bus connects the core and all plugins without coupling them together. It sup
 * Supports two session kinds:
   1. **Temporary (`temp`, default)**: Automatically created in the working directory when no session is active. Expires after a configurable TTL (default: `24h` since last activity).
   2. **Persistent (`persistent`)**: Never expires automatically. Created with `cdx session new`, or by switching the active session with `cdx session mode persistent`.
-* Session management is CLI-only: `cdx session <new|list|use|mode|delete>`. `use` selects an existing session for the directory, `mode` switches the active session between `temp` and `persistent`, and `delete` removes a session with its history. None of these commands takes a prompt.
+  3. **Subagent (`subagent`)**: Created for a delegated turn, linked to the parent by `parent_id`, `root_id`, and `depth`. It never becomes the active session and does not expire on the temp TTL; deleting the parent deletes its subtree.
+  * Every session stores a short title from its first prompt. The CLI and web session lists show the title and keep the raw ID as secondary text.
+* Session management is CLI-only: `cdx session <new|list|use|mode|delete>`. `use` selects an existing session for the directory, `mode` switches the active session between `temp` and `persistent`, and `delete` removes a session with its history and all sub-sessions. None of these commands takes a prompt.
 * **Stateless** execution is a per-request flag (`--no-session`) that skips reading and writing history without touching the directory session.
 * Queries registered provider plugins for the list of available models.
 * Runs the agent turn loop:
@@ -165,4 +167,4 @@ Default plugins live in `plugins/` and are installed into the plugin directory v
 6. **`plugins/context`**: Appends `AGENTS.md`, conversation summary, and the `Environment` / `Tools` block in `session:before_turn` (priority `10`), compacts history when approaching message limits, and exposes its settings as a declarative schema panel. The summary is capped (`max_summary_chars`, default 8000), keeps its newest part, and each dropped message is summarized once per session (a per-session counter in the plugin storage): every turn passes the whole history, so re-summarizing it would grow the summary past the model context window.
 7. **`plugins/tools-local`**: Provides filesystem and shell tools (`read_file`, `write_file`, `edit_file`, `list_dir`, `shell`) to the model.
 8. **`plugins/ask`**: Registers the `ask_user` tool, so the model can ask a question with optional choices or a free-text answer. The tool runs in a worker VM and uses `cdx.questions.ask`, so the plugin control VM stays responsive while the user answers.
-9. **`plugins/subagent`**: Registers the `subagent` tool, which delegates a self-contained task to a child session through `cdx.agents.run`. The child uses the `subagent` preset, works in the same directory, and returns a concise final report as the tool result.
+9. **`plugins/subagent`**: Registers the `subagent` tool, which delegates one self-contained task, or up to 8 independent tasks in parallel, to child sessions through `cdx.agents.run` and `cdx.agents.runMany`. The children use the `subagent` preset, work in the same directory, and return concise final reports as the tool result.

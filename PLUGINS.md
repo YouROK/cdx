@@ -278,3 +278,6 @@ The legacy `window.CDXPluginPanels` registry is not used. New page panels are ES
   * The child shares the working directory and tools, inherits the parent's preset and model unless overridden, and never becomes the active session for the directory.
   * Depth is capped at `1`: a child cannot start another child. Stateless runs (`--no-session`) cannot delegate.
   * Works in worker VMs, like `cdx.questions`. The question broker is shared, so a child can ask the same client.
+* `cdx.agents.runMany({ prompts, preset?, model?, max_steps? })` -> `{ results: [...] }`.
+  * Runs up to `8` independent child turns in parallel and returns their results in the input order. Each result has the same fields as `run`, plus `error` for a failed child.
+  * The default `subagent` tool uses this with its `tasks` array; a single `prompt` stays one child. Separate tool calls remain sequential, so use `tasks` for real parallelism.

@@ -3,7 +3,7 @@ import { apiFetch, postJSON } from "../api.js";
 import { useUI } from "../ui.jsx";
 import { Hint } from "../hint.jsx";
 
-export function GeneralPage({ status, onRefresh }) {
+export function GeneralPage({ status }) {
   const { toast } = useUI();
   const [agent, setAgent] = useState({ max_steps: 40, step_limit_mode: "ask" });
   const [sessions, setSessions] = useState({ temp_ttl_hours: 24 });
@@ -62,9 +62,6 @@ export function GeneralPage({ status, onRefresh }) {
     <div>
       <div className="page-header">
         <h3>General</h3>
-        <button type="button" className="btn btn-default btn-xs" onClick={onRefresh}>
-          Refresh
-        </button>
       </div>
       <div className="stat-grid">
         <div className="stat-card">

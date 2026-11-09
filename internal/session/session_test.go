@@ -955,6 +955,15 @@ func TestRunChildCreatesDetachedChildSession(t *testing.T) {
 	if child.Workdir != parent.Workdir {
 		t.Fatalf("child workdir = %q, want %q", child.Workdir, parent.Workdir)
 	}
+	if child.Kind != KindSubagent {
+		t.Fatalf("child kind = %q, want %q", child.Kind, KindSubagent)
+	}
+	if child.Title != "child task" {
+		t.Fatalf("child title = %q, want the task brief", child.Title)
+	}
+	if child.IsExpired(time.Now().Add(48*time.Hour), DefaultTempTTL) {
+		t.Fatal("a subagent session must not expire on the temp TTL")
+	}
 	if gotModel != "m1" {
 		t.Fatalf("child model = %q, want m1", gotModel)
 	}
@@ -1017,5 +1026,94 @@ func TestRunChildRejectsStatelessTurn(t *testing.T) {
 	ctx := WithTurn(context.Background(), TurnInfo{SessionID: "ephemeral", Workdir: "/work"})
 	if _, err := orch.RunChild(ctx, TurnRequest{Prompt: "x"}); err == nil {
 		t.Fatal("expected an error in a stateless turn")
+	}
+}
+
+func TestDeleteSessionCascadesToChildren(t *testing.T) {
+	orch, _, reg, _ := setupTestOrchestrator(t)
+	reg.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(_ context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "m1", Name: "m1", Default: true}}, nil
+		},
+		Complete: func(_ context.Context, _ plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			return &plugin.CompleteResponse{Content: "child answer"}, nil
+		},
+	})
+
+	parent, err := orch.ResolveForWorkdir("/work", ModeAuto)
+	if err != nil {
+		t.Fatalf("ResolveForWorkdir: %v", err)
+	}
+	ctx := WithTurn(context.Background(), TurnInfo{
+		SessionID: parent.ID,
+		RootID:    parent.ID,
+		Depth:     0,
+		Workdir:   parent.Workdir,
+	})
+	first, err := orch.RunChild(ctx, TurnRequest{Prompt: "first child"})
+	if err != nil {
+		t.Fatalf("RunChild first: %v", err)
+	}
+	second, err := orch.RunChild(ctx, TurnRequest{Prompt: "second child"})
+	if err != nil {
+		t.Fatalf("RunChild second: %v", err)
+	}
+
+	if err := orch.DeleteSession(parent.ID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	sessions, err := orch.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("deleting the parent must delete its children, got %+v", sessions)
+	}
+	for _, id := range []string{parent.ID, first.Session.ID, second.Session.ID} {
+		if _, ok, _ := orch.GetSession(id); ok {
+			t.Fatalf("session %s was not deleted", id)
+		}
+		msgs, err := orch.GetMessages(id)
+		if err != nil {
+			t.Fatalf("GetMessages(%s): %v", id, err)
+		}
+		if len(msgs) != 0 {
+			t.Fatalf("messages of %s were not deleted: %+v", id, msgs)
+		}
+	}
+}
+
+func TestSessionTitle(t *testing.T) {
+	if got := sessionTitle("  first line\nsecond line  "); got != "first line second line" {
+		t.Fatalf("sessionTitle = %q", got)
+	}
+	long := strings.Repeat("x", 100)
+	got := sessionTitle(long)
+	if !strings.HasSuffix(got, "...") || len([]rune(got)) != 83 {
+		t.Fatalf("long sessionTitle = %q", got)
+	}
+}
+
+func TestBackfillSessionTitles(t *testing.T) {
+	orch, _, _, _ := setupTestOrchestrator(t)
+	sess, err := orch.ResolveForWorkdir("/work", ModeAuto)
+	if err != nil {
+		t.Fatalf("ResolveForWorkdir: %v", err)
+	}
+	if err := orch.SaveMessages(sess, []Message{{
+		Role:    "user",
+		Content: "  old prompt\nnext line  ",
+	}}); err != nil {
+		t.Fatalf("SaveMessages: %v", err)
+	}
+	orch.backfillTitles()
+
+	updated, ok, err := orch.GetSession(sess.ID)
+	if err != nil || !ok {
+		t.Fatalf("GetSession: ok=%v err=%v", ok, err)
+	}
+	if updated.Title != "old prompt next line" {
+		t.Fatalf("backfilled title = %q", updated.Title)
 	}
 }

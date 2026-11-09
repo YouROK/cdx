@@ -71,9 +71,6 @@ export function PluginsPage({ onChanged }) {
     <div>
       <div className="page-header">
         <h3>Plugins</h3>
-        <button type="button" className="btn btn-default btn-xs" onClick={loadPlugins}>
-          Refresh
-        </button>
       </div>
 
       <div className="panel mb-md">

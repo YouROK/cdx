@@ -431,6 +431,10 @@ textarea:focus {
   border-collapse: collapse;
 }
 
+.table.sessions-table {
+  table-layout: fixed;
+}
+
 .table th,
 .table td {
   text-align: left;
@@ -446,17 +450,27 @@ textarea:focus {
 
 .table td.sess-actions {
   text-align: right;
+  white-space: normal;
+}
+
+.table tr.session-child td {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.table td.sess-updated,
+.table td.sess-workdir {
   white-space: nowrap;
-  min-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .row-actions {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  flex-wrap: nowrap;
-  white-space: nowrap;
+  flex-wrap: wrap;
+  white-space: normal;
 }
 
 .row-actions .btn {
@@ -822,12 +836,40 @@ textarea:focus {
   text-align: left;
 }
 
+.session-title {
+  display: block;
+  min-width: 0;
+  max-width: 13rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sess-title-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sess-title-lines {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sess-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .link-button:hover {
   text-decoration: underline;
 }
 
 .panel-flush {
   padding: 0;
+  overflow-x: auto;
 }
 
 .panel-pad {

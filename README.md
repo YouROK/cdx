@@ -104,6 +104,9 @@ Stateless runs (`--no-session`) are not queued. To work in parallel, create a
 separate session with `cdx session new`, which becomes the active session for
 the directory.
 
+Sessions are listed by a short title from their first prompt; subagent
+sessions appear under their parent and are deleted with it.
+
 ## Web interface
 
 Open `http://127.0.0.1:8787` while the daemon is running. The dashboard renders
@@ -188,8 +191,10 @@ answer repeats the question; `y`/`n` work in any case.
 
 The model can delegate a self-contained task with the `subagent` tool. The
 child works in the same directory in its own session, does not see the current
-conversation, and returns a concise answer as a tool result. A child cannot
-delegate further, and `--no-session` runs cannot delegate.
+conversation, and returns a concise answer as a tool result. The tool accepts a
+`tasks` array of up to 8 independent briefs and runs them in parallel; separate
+tool calls run one after another. A child cannot delegate further, and
+`--no-session` runs cannot delegate.
 
 That outside-folder option is not a sandbox: commands, symlinks, and absolute
 paths can still leave the folder. Use an isolated environment when a hard limit

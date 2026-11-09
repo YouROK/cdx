@@ -82,6 +82,7 @@ install:
 	$(SUDO) install -d -m755 $(DESTDIR)$(PLUGINS_DIR)
 	@if [ -d plugins ] && [ -n "$$(ls -A plugins 2>/dev/null)" ]; then \
 		$(SUDO) cp -r plugins/* $(DESTDIR)$(PLUGINS_DIR)/; \
+		$(SUDO) chmod -R a+rX $(DESTDIR)$(PLUGINS_DIR); \
 		echo "installed plugins to $(DESTDIR)$(PLUGINS_DIR)"; \
 	fi
 	@echo "installed $(DESTDIR)$(BINDIR)/cdx"

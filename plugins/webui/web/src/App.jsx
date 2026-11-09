@@ -132,7 +132,7 @@ export function App() {
       </aside>
       <main className="main-wrap">
         <div className="page">
-          {section === "general" ? <GeneralPage status={status} onRefresh={refreshStatus} /> : null}
+          {section === "general" ? <GeneralPage status={status} /> : null}
           {section === "sessions" ? (
             route.parts[2] === "live" && route.parts[1] ? (
               <LiveSessionPage

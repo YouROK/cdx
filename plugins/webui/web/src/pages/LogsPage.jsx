@@ -27,9 +27,6 @@ export function LogsPage() {
     <div>
       <div className="page-header">
         <h3>Logs</h3>
-        <button type="button" className="btn btn-default btn-xs" onClick={loadLogs}>
-          Refresh
-        </button>
       </div>
       {loading ? (
         <p className="muted">Loading logs...</p>
