@@ -33,6 +33,7 @@ var DocCDXObject = []DocEntry{
 	{Signature: "cdx.bus.publish|subscribe|handle|request(topic, payload)", Summary: "Communicate across plugins and core via events and 1-to-1 RPC"},
 	{Signature: "cdx.questions.ask(question)", Summary: "Ask the active client a question ({ kind, title, body, details, options, default, text }) and return { choice, text, cancelled, reason }; available in worker VMs"},
 	{Signature: "cdx.agents.run({ prompt, preset, model, max_steps })", Summary: "Run a delegated turn in a fresh child session and return { session_id, content, steps, stopped_reason, usage }; available in worker VMs, depth 1"},
+	{Signature: "cdx.agents.runMany({ prompts, preset, model, max_steps })", Summary: "Run up to 8 independent delegated turns in parallel and return { results } in input order; available in worker VMs"},
 	{Signature: "cdx.http.handle|get|post|put|delete|patch|use|group|static()", Summary: "Register HTTP endpoints, Gin middleware (ctx.bindJSON, ctx.next, ctx.abortWithJSON, ctx.set/get), and static assets"},
 	{Signature: "cdx.ui.register({ title, description, order, schema, config_url, entry, ui_api, styles }) / list()", Summary: "Register a declarative JSON Schema panel or a versioned ESM page panel mounted in an isolated shadow root"},
 	{Signature: "cdx.plugins.list|installZip|setEnabled|remove()", Summary: "Inspect, install from .zip URL, enable/disable, or remove plugins"},

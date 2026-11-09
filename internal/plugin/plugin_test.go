@@ -1451,6 +1451,15 @@ func (r *fakeAgentRunner) RunChild(_ context.Context, req AgentRequest) (AgentRe
 	return r.result, r.err
 }
 
+func (r *fakeAgentRunner) RunChildren(_ context.Context, reqs []AgentRequest) ([]AgentResult, error) {
+	r.requests = append(r.requests, reqs...)
+	out := make([]AgentResult, len(reqs))
+	for i := range reqs {
+		out[i] = r.result
+	}
+	return out, nil
+}
+
 func TestSubagentPluginDelegates(t *testing.T) {
 	tmp := t.TempDir()
 	st, err := store.Open(store.Options{
@@ -1499,7 +1508,7 @@ func TestSubagentPluginDelegates(t *testing.T) {
 		t.Fatalf("empty prompt must not fail the tool: %v", err)
 	}
 	out, _ = res.(map[string]any)
-	if out["error"] != "prompt is required" {
+	if out["error"] != "prompt or tasks are required" {
 		t.Fatalf("unexpected empty-prompt result: %+v", out)
 	}
 
@@ -1507,4 +1516,93 @@ func TestSubagentPluginDelegates(t *testing.T) {
 	if _, err := reg.CallTool(context.Background(), "subagent", map[string]any{"prompt": "again"}); err == nil {
 		t.Fatal("a runner error must fail the tool call")
 	}
+
+	runner.err = nil
+	runner.requests = nil
+	res, err = reg.CallTool(context.Background(), "subagent", map[string]any{
+		"tasks": []any{"first task", "second task", "  "},
+	})
+	if err != nil {
+		t.Fatalf("subagent batch failed: %v", err)
+	}
+	out, _ = res.(map[string]any)
+	batchJSON, err := json.Marshal(out["results"])
+	if err != nil {
+		t.Fatalf("encode batch results: %v", err)
+	}
+	var results []map[string]any
+	if err := json.Unmarshal(batchJSON, &results); err != nil {
+		t.Fatalf("decode batch results: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected two child results, got %+v", out)
+	}
+	if len(runner.requests) != 2 || runner.requests[0].Prompt != "first task" || runner.requests[1].Prompt != "second task" {
+		t.Fatalf("unexpected batch requests: %+v", runner.requests)
+	}
+	for _, req := range runner.requests {
+		if req.Preset != "subagent" {
+			t.Fatalf("batch preset = %q, want subagent", req.Preset)
+		}
+	}
+}
+
+func TestWorkerPoolQueuesInsteadOfFailing(t *testing.T) {
+	tmp := t.TempDir()
+	st, err := store.Open(store.Options{
+		DBPath:        filepath.Join(tmp, "cdx.db"),
+		MasterKeyPath: filepath.Join(tmp, "master.key"),
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	mgr := NewManager(RuntimeDependencies{
+		Store:    st,
+		Bus:      bus.New(),
+		Router:   router.New(),
+		Registry: NewRegistry(),
+		Logger:   logx.New(),
+	})
+	defer mgr.CloseAll()
+
+	pluginsDir := filepath.Join(tmp, "plugins")
+	writePluginFiles(t, pluginsDir, "pool-plugin", `{
+		"id": "pool-plugin",
+		"name": "Pool Plugin",
+		"version": "1.0.0",
+		"description": "Tests the worker pool",
+		"entry": "main.js",
+		"workers": 1
+	}`, `function setup(cdx) {}`)
+	if _, err := mgr.LoadPlugin(context.Background(), filepath.Join(pluginsDir, "pool-plugin")); err != nil {
+		t.Fatalf("load plugin: %v", err)
+	}
+
+	rt := mgr.plugins["pool-plugin"]
+	if rt == nil {
+		t.Fatal("plugin runtime is missing")
+	}
+	if workers := rt.ensureWorkerPool(context.Background()); len(workers) != 1 {
+		t.Fatalf("expected one worker, got %d", len(workers))
+	}
+
+	first, err := rt.acquireWorker(context.Background())
+	if err != nil {
+		t.Fatalf("acquire first worker: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := rt.acquireWorker(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a busy pool must wait for the context, got %v", err)
+	}
+
+	rt.releaseWorker(first)
+	second, err := rt.acquireWorker(context.Background())
+	if err != nil || second != first {
+		t.Fatalf("the released worker was not reused: worker=%p err=%v", second, err)
+	}
+	rt.releaseWorker(second)
 }

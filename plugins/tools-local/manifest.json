@@ -5,5 +5,5 @@
   "description": "Provides filesystem and shell execution tools to the model",
   "entry": "main.js",
   "order": 25,
-  "workers": 2
+  "workers": 8
 }

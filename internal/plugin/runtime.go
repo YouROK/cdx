@@ -99,7 +99,7 @@ type Runtime struct {
 
 	workerMu       sync.Mutex
 	workers        []*Runtime
-	workerNext     int
+	workerFree     chan *Runtime
 	workersFailed  bool
 	workerTools    map[string]goja.Callable
 	workerComplete goja.Callable
@@ -253,22 +253,53 @@ func (rt *Runtime) ensureWorkerPool(ctx context.Context) []*Runtime {
 		}
 		workers = append(workers, worker)
 	}
+	rt.workerFree = make(chan *Runtime, len(workers))
+	for _, worker := range workers {
+		rt.workerFree <- worker
+	}
 	rt.workers = workers
 	rt.logScope.Debug("Started %d worker VMs", len(workers))
 	return workers
 }
 
-func (rt *Runtime) pickWorker(ctx context.Context) (*Runtime, bool) {
+// errNoWorkers reports that the plugin has no usable worker VMs.
+var errNoWorkers = errors.New("plugin has no worker VMs")
+
+// acquireWorker takes a free worker VM, waiting for one when all are busy.
+func (rt *Runtime) acquireWorker(ctx context.Context) (*Runtime, error) {
 	workers := rt.ensureWorkerPool(ctx)
 	if len(workers) == 0 {
-		return nil, false
+		return nil, errNoWorkers
 	}
+	select {
+	case <-rt.done:
+		return nil, fmt.Errorf("plugin %q is stopped", rt.manifest.ID)
+	default:
+	}
+	select {
+	case worker := <-rt.workerFree:
+		return worker, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-rt.done:
+		return nil, fmt.Errorf("plugin %q is stopped", rt.manifest.ID)
+	}
+}
 
-	rt.workerMu.Lock()
-	index := rt.workerNext % len(workers)
-	rt.workerNext++
-	rt.workerMu.Unlock()
-	return workers[index], true
+// releaseWorker returns a worker VM to the pool unless it has stopped.
+func (rt *Runtime) releaseWorker(worker *Runtime) {
+	if worker == nil {
+		return
+	}
+	select {
+	case <-worker.done:
+		return
+	default:
+	}
+	select {
+	case rt.workerFree <- worker:
+	default:
+	}
 }
 
 func (rt *Runtime) runComplete(ctx context.Context, completeFn goja.Callable, req CompleteRequest, onStream func(StreamEvent)) (*CompleteResponse, error) {
@@ -307,8 +338,15 @@ func (rt *Runtime) runComplete(ctx context.Context, completeFn goja.Callable, re
 }
 
 func (rt *Runtime) completeInWorker(ctx context.Context, req CompleteRequest, onStream func(StreamEvent)) (*CompleteResponse, error, bool) {
-	worker, ok := rt.pickWorker(ctx)
-	if !ok || worker.workerComplete == nil {
+	worker, err := rt.acquireWorker(ctx)
+	if err != nil {
+		if errors.Is(err, errNoWorkers) {
+			return nil, nil, false
+		}
+		return nil, err, true
+	}
+	defer rt.releaseWorker(worker)
+	if worker.workerComplete == nil {
 		return nil, nil, false
 	}
 	resp, err := worker.runComplete(ctx, worker.workerComplete, req, onStream)
@@ -326,10 +364,14 @@ func (rt *Runtime) runTool(ctx context.Context, fn goja.Callable, args map[strin
 }
 
 func (rt *Runtime) toolInWorker(ctx context.Context, name string, args map[string]any) (any, error, bool) {
-	worker, ok := rt.pickWorker(ctx)
-	if !ok {
-		return nil, nil, false
+	worker, err := rt.acquireWorker(ctx)
+	if err != nil {
+		if errors.Is(err, errNoWorkers) {
+			return nil, nil, false
+		}
+		return nil, err, true
 	}
+	defer rt.releaseWorker(worker)
 	fn := worker.workerTools[name]
 	if fn == nil {
 		return nil, nil, false
@@ -824,14 +866,7 @@ func (rt *Runtime) buildAgentsObject(vm *goja.Runtime) *goja.Object {
 		if value, ok := raw["model"].(string); ok {
 			req.Model = value
 		}
-		switch value := raw["max_steps"].(type) {
-		case int64:
-			req.MaxSteps = int(value)
-		case float64:
-			req.MaxSteps = int(value)
-		case int:
-			req.MaxSteps = value
-		}
+		req.MaxSteps = agentMaxSteps(raw["max_steps"])
 
 		result, err := rt.deps.Agents.RunChild(rt.currentCtx(), req)
 		if err != nil {
@@ -845,7 +880,59 @@ func (rt *Runtime) buildAgentsObject(vm *goja.Runtime) *goja.Object {
 			"usage":          result.Usage,
 		}
 	})
+	_ = obj.Set("runMany", func(raw map[string]any) map[string]any {
+		if rt.deps.Agents == nil {
+			panic(vm.NewGoError(errors.New("subagents are not available")))
+		}
+		items, _ := raw["prompts"].([]any)
+		preset, _ := raw["preset"].(string)
+		model, _ := raw["model"].(string)
+		maxSteps := agentMaxSteps(raw["max_steps"])
+		reqs := make([]AgentRequest, 0, len(items))
+		for _, item := range items {
+			prompt, _ := item.(string)
+			if strings.TrimSpace(prompt) == "" {
+				continue
+			}
+			reqs = append(reqs, AgentRequest{Prompt: prompt, Preset: preset, Model: model, MaxSteps: maxSteps})
+		}
+		if len(reqs) == 0 {
+			panic(vm.NewGoError(errors.New("prompts are required")))
+		}
+		if len(reqs) > MaxAgentTasks {
+			panic(vm.NewGoError(fmt.Errorf("at most %d subagent tasks are allowed", MaxAgentTasks)))
+		}
+
+		results, err := rt.deps.Agents.RunChildren(rt.currentCtx(), reqs)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		out := make([]map[string]any, 0, len(results))
+		for _, result := range results {
+			out = append(out, map[string]any{
+				"session_id":     result.SessionID,
+				"content":        result.Content,
+				"steps":          result.Steps,
+				"stopped_reason": result.StoppedReason,
+				"error":          result.Error,
+			})
+		}
+		return map[string]any{"results": out}
+	})
 	return obj
+}
+
+// agentMaxSteps reads the optional max_steps value passed from JavaScript.
+func agentMaxSteps(value any) int {
+	switch v := value.(type) {
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
 }
 
 func (rt *Runtime) buildHTTPObject(vm *goja.Runtime, groupPrefix string) *goja.Object {

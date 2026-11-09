@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -590,5 +592,93 @@ func TestSubagentToolRunsAChildTurn(t *testing.T) {
 	}
 	if child == nil || child.Depth != 1 || child.RootID != parent.ID {
 		t.Fatalf("unexpected child sessions: %+v", sessions)
+	}
+}
+
+func TestSubagentToolRunsParallelTasks(t *testing.T) {
+	tmp := t.TempDir()
+	layout := paths.ResolveWithHome(tmp, func(string) string { return "" })
+	layout.PluginDirs = []string{repoPluginsDir(t)}
+
+	d, err := New(context.Background(), Options{Layout: layout})
+	if err != nil {
+		t.Fatalf("daemon.New failed: %v", err)
+	}
+	if err := d.Start(); err != nil {
+		t.Fatalf("daemon.Start failed: %v", err)
+	}
+	defer d.Stop()
+
+	var started atomic.Int32
+	both := make(chan struct{})
+	d.registry.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "mock-child", Name: "mock-child", Default: true}}, nil
+		},
+		Complete: func(ctx context.Context, _ plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			if started.Add(1) == 8 {
+				close(both)
+			}
+			select {
+			case <-both:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(3 * time.Second):
+				return nil, errors.New("children did not run in parallel")
+			}
+			return &plugin.CompleteResponse{Content: "child answer"}, nil
+		},
+	})
+
+	parent, err := d.sessions.ResolveForWorkdir("/work", session.ModeAuto)
+	if err != nil {
+		t.Fatalf("ResolveForWorkdir: %v", err)
+	}
+	ctx := session.WithTurn(context.Background(), session.TurnInfo{
+		SessionID: parent.ID,
+		RootID:    parent.ID,
+		Depth:     0,
+		Workdir:   parent.Workdir,
+	})
+
+	tasks := make([]any, 8)
+	for i := range tasks {
+		tasks[i] = fmt.Sprintf("child task %d", i+1)
+	}
+	res, err := d.registry.CallTool(ctx, "subagent", map[string]any{"tasks": tasks})
+	if err != nil {
+		t.Fatalf("subagent batch failed: %v", err)
+	}
+	out, _ := res.(map[string]any)
+	rawResults, err := json.Marshal(out["results"])
+	if err != nil {
+		t.Fatalf("encode results: %v", err)
+	}
+	var results []map[string]any
+	if err := json.Unmarshal(rawResults, &results); err != nil {
+		t.Fatalf("decode results: %v", err)
+	}
+	if len(results) != 8 {
+		t.Fatalf("expected eight results, got %+v", results)
+	}
+	for _, result := range results {
+		if result["content"] != "child answer" || result["error"] != "" {
+			t.Fatalf("unexpected child result: %+v", result)
+		}
+	}
+
+	sessions, err := d.sessions.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	children := 0
+	for _, item := range sessions {
+		if item.ParentID == parent.ID {
+			children++
+		}
+	}
+	if children != 8 {
+		t.Fatalf("expected eight child sessions, got %d: %+v", children, sessions)
 	}
 }

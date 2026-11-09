@@ -61,6 +61,36 @@ func (r agentRunner) RunChild(ctx context.Context, req plugin.AgentRequest) (plu
 	}, nil
 }
 
+func (r agentRunner) RunChildren(ctx context.Context, reqs []plugin.AgentRequest) ([]plugin.AgentResult, error) {
+	results := make([]plugin.AgentResult, len(reqs))
+	if len(reqs) == 0 {
+		return results, nil
+	}
+
+	sem := make(chan struct{}, plugin.MaxAgentTasks)
+	var wg sync.WaitGroup
+	for i := range reqs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				results[i] = plugin.AgentResult{Error: ctx.Err().Error()}
+				return
+			}
+			result, err := r.RunChild(ctx, reqs[i])
+			if err != nil {
+				result.Error = err.Error()
+			}
+			results[i] = result
+		}(i)
+	}
+	wg.Wait()
+	return results, nil
+}
+
 // clientAsker routes a question to the IPC client of the running turn.
 type clientAsker struct{}
 
