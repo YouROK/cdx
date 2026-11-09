@@ -111,6 +111,8 @@ The bus connects the core and all plugins without coupling them together. It sup
   * `cdx.providers` - register as an LLM provider (`listModels` callback, `complete` streaming handler). The core only queries which models the provider exposes and delegates chat completion turns to it.
   * `cdx.hooks` - register lifecycle interceptors (`on(hookName, priority, handler)`).
   * `cdx.bus` - publish events and send RPC requests.
+  * `cdx.questions` - ask the active client a question through the core broker; works in worker VMs.
+  * `cdx.agents` - run a delegated turn in a fresh child session and wait for its result; works in worker VMs.
   * `cdx.sys` - low-level host capabilities (HTTP fetch/streaming, file I/O, cryptographic random bytes, process execution).
 
 ### 3.7. Session Orchestrator (`internal/session`)
@@ -118,6 +120,7 @@ The bus connects the core and all plugins without coupling them together. It sup
 * Binds every session to a working directory and resolves the active session like Git: the nearest session in the current directory or its parents wins. An explicit session in a child directory shadows the parent session without affecting it.
 * Serializes turns per session: a turn reserves its session before reading history and releases it when it finishes, and a prompt that arrives meanwhile waits in FIFO order. A session therefore always has a single writer, and the next turn sees the previous answer. Session resolution is atomic, so two simultaneous first prompts share one session. `--no-session` runs are not queued; to work in parallel in one directory, create a separate session with `cdx session new`.
 * Owns the client question broker: the core validates a question envelope (`kind`, `title`, `body`, `details`, `options`, `default`, `text`), routes it to the client of the running turn, and returns `{ choice, text, cancelled }` without interpreting the question kind. The step-limit prompt uses it, and plugins reach the same broker through `cdx.questions.ask`, including from worker VMs.
+* Runs delegated turns: `cdx.agents.run` asks the orchestrator to create a child session (`parent_id`, `root_id`, `depth + 1`) and run a full turn in it while the parent waits. The child shares the working directory and tools, keeps its own history, and never becomes the active session. Depth is capped at `1`, and a stateless parent cannot delegate.
 * Enforces a per-turn tool-step budget from core settings (default `40`, range `1`-`200`). The `step_limit_mode` setting decides what happens when the budget is exhausted: `none` runs the turn without a limit, `ask` (default) asks the interactive client whether to continue with another equal budget, and `stop` ends the turn. The settings are re-read at that point, so a change made during the turn applies to it. The stop reason is stored on the session and returned to the client.
 * Writes the prompt and every finished step to the store, so an interrupted turn keeps its prompt, answers, and tool results; a tool call left without a result is dropped when the session is loaded.
 * Keeps the running turn in memory (streamed text, reasoning, tool calls, and the number of messages stored before it). `GET /api/core/sessions/:id/live` returns that snapshot and the sessions list reports the IDs of sessions with a running turn, so the dashboard can follow a turn without waiting for the stored messages.
@@ -155,7 +158,7 @@ Default plugins live in `plugins/` and are installed into the plugin directory v
    * Exposes its own React page panel and HTTP endpoints on the core router.
    * Registers available models with the core via `cdx.providers`.
 4. **`plugins/presets`**:
-   * Manages built-in (`standard`, `mini`, `creator`) and custom agent presets.
+   * Manages built-in (`standard`, `mini`, `creator`, `subagent`) and custom agent presets.
    * Replaces `{{workspace}}` and `{{max_iterations}}` in preset prompts from the active session and step budget.
    * Dynamically embeds the live Plugin API Reference (`cdx.apiDoc()`, generated from `internal/plugin/doc.go`) into the `creator` preset.
    * Sets the base system prompt in `session:before_turn` (priority `5`) and exposes the `Agent presets` page in the Web UI as a React page panel.
@@ -163,3 +166,4 @@ Default plugins live in `plugins/` and are installed into the plugin directory v
 6. **`plugins/context`**: Appends `AGENTS.md`, conversation summary, and the `Environment` / `Tools` block in `session:before_turn` (priority `10`), compacts history when approaching message limits, and exposes its settings as a declarative schema panel. The summary is capped (`max_summary_chars`, default 8000), keeps its newest part, and each dropped message is summarized once per session (a per-session counter in the plugin storage): every turn passes the whole history, so re-summarizing it would grow the summary past the model context window.
 7. **`plugins/tools-local`**: Provides filesystem and shell tools (`read_file`, `write_file`, `edit_file`, `list_dir`, `shell`) to the model.
 8. **`plugins/ask`**: Registers the `ask_user` tool, so the model can ask a question with optional choices or a free-text answer. The tool runs in a worker VM and uses `cdx.questions.ask`, so the plugin control VM stays responsive while the user answers.
+9. **`plugins/subagent`**: Registers the `subagent` tool, which delegates a self-contained task to a child session through `cdx.agents.run`. The child uses the `subagent` preset, works in the same directory, and returns a concise final report as the tool result.

@@ -263,7 +263,11 @@ func (a *App) runSessionCmd(args []string) error {
 			if id, _ := s["id"].(string); id == activeID {
 				marker = "*"
 			}
-			fmt.Fprintf(a.Stdout, "%s %s  [%s]  msgs=%v  dir=%s\n", marker, s["id"], s["kind"], s["message_count"], s["workdir"])
+			suffix := ""
+			if parent, _ := s["parent_id"].(string); parent != "" {
+				suffix = "  parent=" + parent
+			}
+			fmt.Fprintf(a.Stdout, "%s %s  [%s]  msgs=%v  dir=%s%s\n", marker, s["id"], s["kind"], s["message_count"], s["workdir"], suffix)
 		}
 		return nil
 

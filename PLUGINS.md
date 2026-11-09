@@ -122,8 +122,8 @@ Isolated per-plugin **AES-256-GCM** encrypted bucket (`plugin_secrets:<id>`) in 
 ### 4.7. Lifecycle Hooks (`cdx.hooks`)
 * `cdx.hooks.on(hookName, priority, handler)`:
   * `session:before_turn`: inspect or mutate `{ session_id, workdir, model, preset, max_steps, system_prompt, summary, messages, tools }`; `max_steps` is `0` when the turn runs without a step limit.
-  * `tool:before_call`: inspect or mutate `{ session_id, workdir, tool, permission, arguments }`, or `throw new Error(...)` to block tool execution. Set `payload.ask` to a [question envelope](#413-client-questions-cdxquestions) to ask the client without holding the plugin VM; the core asks and then runs `tool:decided`.
-  * `tool:decided`: receives `{ session_id, workdir, tool, permission, arguments, choice, text, cancelled, tag }` after the client answers. Act only when `tag` matches the question your plugin asked, then return `allowed: true` to run the tool; otherwise the core reports `error` (or a default message) to the model. Persist `once`, `session`, `daemon`, and `always` grants here. Without a deciding hook an asked tool call is denied.
+  * `tool:before_call`: inspect or mutate `{ session_id, root_session_id, depth, workdir, tool, permission, arguments }`, or `throw new Error(...)` to block tool execution. Set `payload.ask` to a [question envelope](#413-client-questions-cdxquestions) to ask the client without holding the plugin VM; the core asks and then runs `tool:decided`.
+  * `tool:decided`: receives `{ session_id, root_session_id, depth, workdir, tool, permission, arguments, choice, text, cancelled, tag }` after the client answers. Key `session` grants by `root_session_id` so they cover delegated turns. Act only when `tag` matches the question your plugin asked, then return `allowed: true` to run the tool; otherwise the core reports `error` (or a default message) to the model. Persist `once`, `session`, `daemon`, and `always` grants here. Without a deciding hook an asked tool call is denied.
   * `tool:after_call`: inspect or mutate `{ session_id, workdir, tool, arguments, output }`.
 
 ### 4.8. Event & RPC Bus (`cdx.bus`)
@@ -267,4 +267,12 @@ The legacy `window.CDXPluginPanels` registry is not used. New page panels are ES
   * `question` is an envelope: `kind` (rendering hint such as `model` or `permission`), `title` (required), `body`, `details` (`[{ label, value }]`), `options` (`[{ id, label, description }]`), `default` (an option id), `text` (allow a free-text answer), and `tag` (asker identity: the host stamps it for `cdx.questions.ask`, a hook sets it for its own questions).
   * The host sets `source` to `plugin:<id>`; a plugin cannot claim to be the core.
   * Unlike `cdx.bus`, `cdx.questions` also works inside worker VMs, so tools marked with `cdx.inWorker` can ask the user.
+  * When options are present the client resolves a default (the given one, otherwise the first option), so Enter accepts it. Free text without an option cancels on an empty line, and non-interactive clients answer `cancelled` without showing the question.
   * Validation rejects an empty title, duplicate option ids, a default that is not an option, more than 20 options or details, and a question with neither options nor free text.
+
+### 4.14. Subagents (`cdx.agents`)
+* `cdx.agents.run({ prompt, preset?, model?, max_steps? })` -> `{ session_id, content, steps, stopped_reason, usage }`.
+  * Runs a delegated turn in a fresh child session and waits for its result. The child does not see the current conversation, so `prompt` must be a self-contained brief: goal, relevant files, constraints, and the expected result.
+  * The child shares the working directory and tools, inherits the parent's preset and model unless overridden, and never becomes the active session for the directory.
+  * Depth is capped at `1`: a child cannot start another child. Stateless runs (`--no-session`) cannot delegate.
+  * Works in worker VMs, like `cdx.questions`. The question broker is shared, so a child can ask the same client.

@@ -912,3 +912,110 @@ func TestToolCallDeniedByQuestionKeepsToolError(t *testing.T) {
 		t.Fatalf("unexpected content: %q", res.Content)
 	}
 }
+
+func TestRunChildCreatesDetachedChildSession(t *testing.T) {
+	orch, _, reg, _ := setupTestOrchestrator(t)
+
+	var gotModel string
+	reg.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(_ context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "m1", Name: "m1", Default: true}}, nil
+		},
+		Complete: func(_ context.Context, req plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			gotModel = req.Model
+			return &plugin.CompleteResponse{Content: "child answer"}, nil
+		},
+	})
+
+	parent, err := orch.ResolveForWorkdir("/work", ModeAuto)
+	if err != nil {
+		t.Fatalf("ResolveForWorkdir: %v", err)
+	}
+	ctx := WithTurn(context.Background(), TurnInfo{
+		SessionID: parent.ID,
+		RootID:    parent.ID,
+		Depth:     0,
+		Workdir:   parent.Workdir,
+		Preset:    "mini",
+		Model:     "m1",
+	})
+
+	res, err := orch.RunChild(ctx, TurnRequest{Prompt: "child task"})
+	if err != nil {
+		t.Fatalf("RunChild failed: %v", err)
+	}
+	if res.Content != "child answer" {
+		t.Fatalf("unexpected content: %q", res.Content)
+	}
+	child := res.Session
+	if child.ParentID != parent.ID || child.RootID != parent.ID || child.Depth != 1 {
+		t.Fatalf("unexpected child session: %+v", child)
+	}
+	if child.Workdir != parent.Workdir {
+		t.Fatalf("child workdir = %q, want %q", child.Workdir, parent.Workdir)
+	}
+	if gotModel != "m1" {
+		t.Fatalf("child model = %q, want m1", gotModel)
+	}
+
+	active, err := orch.ActiveForWorkdir("/work")
+	if err != nil {
+		t.Fatalf("ActiveForWorkdir: %v", err)
+	}
+	if active == nil || active.ID != parent.ID {
+		t.Fatalf("the child must not become the active session: %+v", active)
+	}
+	parentMsgs, err := orch.GetMessages(parent.ID)
+	if err != nil {
+		t.Fatalf("parent messages: %v", err)
+	}
+	if len(parentMsgs) != 0 {
+		t.Fatalf("the child must not write to the parent history: %+v", parentMsgs)
+	}
+	childMsgs, err := orch.GetMessages(child.ID)
+	if err != nil {
+		t.Fatalf("child messages: %v", err)
+	}
+	if len(childMsgs) != 2 || childMsgs[0].Role != "user" || childMsgs[0].Content != "child task" {
+		t.Fatalf("unexpected child history: %+v", childMsgs)
+	}
+	sessions, err := orch.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected parent and child sessions, got %d: %+v", len(sessions), sessions)
+	}
+}
+
+func TestRunChildRejectsDepthLimit(t *testing.T) {
+	orch, _, _, _ := setupTestOrchestrator(t)
+
+	parent, err := orch.ResolveForWorkdir("/work", ModeAuto)
+	if err != nil {
+		t.Fatalf("ResolveForWorkdir: %v", err)
+	}
+	ctx := WithTurn(context.Background(), TurnInfo{SessionID: parent.ID, RootID: parent.ID, Depth: 1, Workdir: parent.Workdir})
+
+	if _, err := orch.RunChild(ctx, TurnRequest{Prompt: "too deep"}); err == nil || !strings.Contains(err.Error(), "depth") {
+		t.Fatalf("expected a depth error, got %v", err)
+	}
+}
+
+func TestRunChildRequiresTurnContext(t *testing.T) {
+	orch, _, _, _ := setupTestOrchestrator(t)
+
+	if _, err := orch.RunChild(context.Background(), TurnRequest{Prompt: "x"}); err == nil {
+		t.Fatal("expected an error outside a turn")
+	}
+}
+
+func TestRunChildRejectsStatelessTurn(t *testing.T) {
+	orch, _, _, _ := setupTestOrchestrator(t)
+
+	ctx := WithTurn(context.Background(), TurnInfo{SessionID: "ephemeral", Workdir: "/work"})
+	if _, err := orch.RunChild(ctx, TurnRequest{Prompt: "x"}); err == nil {
+		t.Fatal("expected an error in a stateless turn")
+	}
+}

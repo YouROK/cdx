@@ -63,6 +63,9 @@ type Session struct {
 	Model         string `json:"model,omitempty"`
 	Summary       string `json:"summary,omitempty"`
 	StoppedReason string `json:"stopped_reason,omitempty"`
+	ParentID      string `json:"parent_id,omitempty"`
+	RootID        string `json:"root_id,omitempty"`
+	Depth         int    `json:"depth,omitempty"`
 	MessageCount  int    `json:"message_count"`
 	TokensIn      int    `json:"tokens_in"`
 	TokensOut     int    `json:"tokens_out"`
@@ -148,6 +151,9 @@ func NewOrchestrator(st *store.Store, eb *bus.Bus, reg *plugin.Registry, logger 
 // DefaultMaxSteps is the default number of model/tool iterations per turn.
 const DefaultMaxSteps = 40
 
+// maxChildDepth caps how many levels of delegated turns one turn can start.
+const maxChildDepth = 1
+
 // Step-limit modes stored in the step_limit_mode setting.
 const (
 	StepLimitNone = "none" // The turn runs without a tool-step limit.
@@ -231,16 +237,19 @@ func (o *Orchestrator) askToolPermission(ctx context.Context, spec plugin.ToolSp
 		return false, "", err
 	}
 
+	turnInfo, _ := TurnFromContext(ctx)
 	payload := map[string]any{
-		"session_id": sessionID,
-		"workdir":    workdir,
-		"tool":       toolName,
-		"permission": spec.Permission,
-		"arguments":  args,
-		"choice":     answer.Choice,
-		"text":       answer.Text,
-		"cancelled":  answer.Cancelled,
-		"tag":        ask.Tag,
+		"session_id":      sessionID,
+		"root_session_id": turnInfo.RootID,
+		"depth":           turnInfo.Depth,
+		"workdir":         workdir,
+		"tool":            toolName,
+		"permission":      spec.Permission,
+		"arguments":       args,
+		"choice":          answer.Choice,
+		"text":            answer.Text,
+		"cancelled":       answer.Cancelled,
+		"tag":             ask.Tag,
 	}
 	decision, decErr := o.bus.RunHook(ctx, "tool:decided", payload)
 	if decErr != nil {
@@ -679,6 +688,23 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 		defer release()
 	}
 
+	rootID := sess.RootID
+	if rootID == "" {
+		rootID = sess.ID
+	}
+	modelName := req.Model
+	if modelName == "" {
+		modelName = sess.Model
+	}
+	ctx = WithTurn(ctx, TurnInfo{
+		SessionID: sess.ID,
+		RootID:    rootID,
+		Depth:     sess.Depth,
+		Workdir:   sess.Workdir,
+		Preset:    req.Preset,
+		Model:     modelName,
+	})
+
 	if onEvent != nil {
 		onEvent(TurnEvent{Type: "session", Session: sess})
 	}
@@ -691,11 +717,6 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 	// unanswered tool calls.
 	storedCount := len(history)
 	history = repairToolCalls(history)
-
-	modelName := req.Model
-	if modelName == "" {
-		modelName = sess.Model
-	}
 
 	live := o.beginLive(sess, req.Prompt, modelName, storedCount)
 	defer func() {
@@ -877,11 +898,13 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 				if o.bus != nil {
 					spec, _ := o.registry.GetTool(toolName)
 					hookOut, hookErr := o.bus.RunHook(ctx, "tool:before_call", map[string]any{
-						"session_id": sess.ID,
-						"workdir":    sess.Workdir,
-						"tool":       toolName,
-						"permission": spec.Permission,
-						"arguments":  args,
+						"session_id":      sess.ID,
+						"root_session_id": rootID,
+						"depth":           sess.Depth,
+						"workdir":         sess.Workdir,
+						"tool":            toolName,
+						"permission":      spec.Permission,
+						"arguments":       args,
 					})
 					if hookErr != nil {
 						toolErrStr := fmt.Sprintf("error: %v", hookErr)
@@ -1009,6 +1032,68 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 		StoppedReason: stoppedReason,
 		Usage:         lastUsage,
 	}, nil
+}
+
+// RunChild starts a delegated turn in a fresh child session and waits for its result.
+// The child keeps its own history, shares the working directory, and never becomes the active session.
+func (o *Orchestrator) RunChild(ctx context.Context, req TurnRequest) (*TurnResult, error) {
+	parent, ok := TurnFromContext(ctx)
+	if !ok {
+		return nil, fmt.Errorf("not inside a turn")
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		return nil, fmt.Errorf("child prompt is required")
+	}
+	if parent.SessionID == "" || parent.SessionID == "ephemeral" {
+		return nil, fmt.Errorf("subagents require a session")
+	}
+	if parent.Depth+1 > maxChildDepth {
+		return nil, fmt.Errorf("subagent depth limit %d is reached", maxChildDepth)
+	}
+
+	parentSess, found, err := o.GetSession(parent.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("session %q is not found", parent.SessionID)
+	}
+
+	now := o.nowFn()
+	rootID := parentSess.RootID
+	if rootID == "" {
+		rootID = parentSess.ID
+	}
+	child := &Session{
+		ID:        newSessionID(),
+		Workdir:   parentSess.Workdir,
+		Kind:      KindTemp,
+		Model:     parentSess.Model,
+		ParentID:  parentSess.ID,
+		RootID:    rootID,
+		Depth:     parent.Depth + 1,
+		CreatedAt: now.Unix(),
+		UpdatedAt: now.Unix(),
+	}
+	if err := o.saveSession(child); err != nil {
+		return nil, err
+	}
+
+	childReq := TurnRequest{
+		SessionID: child.ID,
+		Workdir:   child.Workdir,
+		Prompt:    req.Prompt,
+		Model:     req.Model,
+		Preset:    req.Preset,
+		MaxSteps:  req.MaxSteps,
+	}
+	if childReq.Model == "" {
+		childReq.Model = parent.Model
+	}
+	if childReq.Preset == "" {
+		childReq.Preset = parent.Preset
+	}
+	return o.RunTurn(ctx, childReq, nil)
 }
 
 func (o *Orchestrator) createSession(workdir, kind string, now time.Time) (*Session, error) {

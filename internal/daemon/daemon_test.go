@@ -96,11 +96,11 @@ func TestDefaultPluginsAndWebUI(t *testing.T) {
 	_ = json.NewDecoder(statusResp.Body).Decode(&statusData)
 	statusResp.Body.Close()
 
-	if len(statusData.Plugins) != 8 {
-		t.Fatalf("expected 8 default plugins loaded, got %d: %+v", len(statusData.Plugins), statusData.Plugins)
+	if len(statusData.Plugins) != 9 {
+		t.Fatalf("expected 9 default plugins loaded, got %d: %+v", len(statusData.Plugins), statusData.Plugins)
 	}
-	if len(statusData.Tools) != 6 {
-		t.Fatalf("expected 6 tools registered, got %d: %+v", len(statusData.Tools), statusData.Tools)
+	if len(statusData.Tools) != 7 {
+		t.Fatalf("expected 7 tools registered, got %d: %+v", len(statusData.Tools), statusData.Tools)
 	}
 
 	// 4. The step-limit settings round-trip through the core API.
@@ -530,5 +530,65 @@ func TestConcurrentTurnsOverIPCWaitForTheRunningSession(t *testing.T) {
 	}
 	if sessions[0].MessageCount != 4 {
 		t.Fatalf("expected 4 messages in the shared session, got %d", sessions[0].MessageCount)
+	}
+}
+
+func TestSubagentToolRunsAChildTurn(t *testing.T) {
+	tmp := t.TempDir()
+	layout := paths.ResolveWithHome(tmp, func(string) string { return "" })
+	layout.PluginDirs = []string{repoPluginsDir(t)}
+
+	d, err := New(context.Background(), Options{Layout: layout})
+	if err != nil {
+		t.Fatalf("daemon.New failed: %v", err)
+	}
+	if err := d.Start(); err != nil {
+		t.Fatalf("daemon.Start failed: %v", err)
+	}
+	defer d.Stop()
+
+	d.registry.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "mock-child", Name: "mock-child", Default: true}}, nil
+		},
+		Complete: func(context.Context, plugin.CompleteRequest, func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			return &plugin.CompleteResponse{Content: "child answer"}, nil
+		},
+	})
+
+	parent, err := d.sessions.ResolveForWorkdir("/work", session.ModeAuto)
+	if err != nil {
+		t.Fatalf("ResolveForWorkdir: %v", err)
+	}
+	ctx := session.WithTurn(context.Background(), session.TurnInfo{
+		SessionID: parent.ID,
+		RootID:    parent.ID,
+		Depth:     0,
+		Workdir:   parent.Workdir,
+	})
+
+	res, err := d.registry.CallTool(ctx, "subagent", map[string]any{"prompt": "do the child task"})
+	if err != nil {
+		t.Fatalf("subagent failed: %v", err)
+	}
+	out, _ := res.(map[string]any)
+	if out["content"] != "child answer" {
+		t.Fatalf("unexpected subagent result: %+v", out)
+	}
+
+	sessions, err := d.sessions.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	var child *session.Session
+	for i := range sessions {
+		if sessions[i].ParentID == parent.ID {
+			child = &sessions[i]
+			break
+		}
+	}
+	if child == nil || child.Depth != 1 || child.RootID != parent.ID {
+		t.Fatalf("unexpected child sessions: %+v", sessions)
 	}
 }

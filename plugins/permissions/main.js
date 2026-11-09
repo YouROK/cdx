@@ -24,7 +24,7 @@ function setup(cdx) {
     return cfg;
   }
 
-  function policyFor(toolName, permissionLevel, sessionID) {
+  function policyFor(toolName, permissionLevel, sessionID, rootID) {
     var cfg = getConfig();
     if (cfg.tool_rules && cfg.tool_rules[toolName]) {
       return cfg.tool_rules[toolName];
@@ -35,8 +35,10 @@ function setup(cdx) {
     if (daemonGrants[grantKey]) {
       return "allow";
     }
-    if (sessionID && sessionGrants[sessionID] && sessionGrants[sessionID][grantKey]) {
-      return sessionGrants[sessionID][grantKey];
+    // A session grant covers the whole delegation tree.
+    var grantSession = rootID || sessionID;
+    if (grantSession && sessionGrants[grantSession] && sessionGrants[grantSession][grantKey]) {
+      return sessionGrants[grantSession][grantKey];
     }
 
     if (lvl === "read") {
@@ -225,7 +227,8 @@ function setup(cdx) {
     var tool = payload.tool || "";
     var level = payload.permission || "edit";
     var sessionID = payload.session_id || "";
-    var policy = policyFor(tool, level, sessionID);
+    var rootID = payload.root_session_id || "";
+    var policy = policyFor(tool, level, sessionID, rootID);
 
     if (policy === "deny") {
       throw new Error("permission denied by policy for tool: " + tool);
@@ -282,7 +285,7 @@ function setup(cdx) {
     }
     var tool = payload.tool || "";
     var level = payload.permission || "edit";
-    var sessionID = payload.session_id || "";
+    var sessionID = payload.root_session_id || payload.session_id || "";
     var choice = payload.choice ? String(payload.choice) : "";
     var allowed = !payload.cancelled && choice !== "" && choice !== "deny";
 

@@ -182,7 +182,13 @@ and a separate option decides what happens outside the working folder.
 
 The model can also ask its own question when a request is ambiguous. Those
 prompts are labelled "The agent asks:" and never carry permission grants, so
-they cannot be confused with a system confirmation.
+they cannot be confused with a system confirmation. Enter picks the
+recommended option, or the first one when none is marked.
+
+The model can delegate a self-contained task with the `subagent` tool. The
+child works in the same directory in its own session, does not see the current
+conversation, and returns a concise answer as a tool result. A child cannot
+delegate further, and `--no-session` runs cannot delegate.
 
 That outside-folder option is not a sandbox: commands, symlinks, and absolute
 paths can still leave the folder. Use an isolated environment when a hard limit

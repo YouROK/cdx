@@ -75,6 +75,7 @@ type RuntimeDependencies struct {
 	Registry *Registry
 	Plugins  *Manager
 	Logger   *logx.Logger
+	Agents   AgentRunner
 	Sys      *SysAPI
 }
 
@@ -441,6 +442,7 @@ func (rt *Runtime) bindCDX(vm *goja.Runtime) {
 	_ = cdxObj.Set("bus", rt.buildBusObject(vm))
 	_ = cdxObj.Set("hooks", rt.buildHooksObject(vm))
 	_ = cdxObj.Set("questions", rt.buildQuestionsObject(vm))
+	_ = cdxObj.Set("agents", rt.buildAgentsObject(vm))
 	_ = cdxObj.Set("http", rt.buildHTTPObject(vm, ""))
 	_ = cdxObj.Set("ui", rt.buildUIObject(vm))
 	_ = cdxObj.Set("tools", rt.buildToolsObject(vm))
@@ -799,6 +801,48 @@ func (rt *Runtime) buildQuestionsObject(vm *goja.Runtime) *goja.Object {
 			"text":      answer.Text,
 			"cancelled": answer.Cancelled,
 			"reason":    answer.Reason,
+		}
+	})
+	return obj
+}
+
+// buildAgentsObject exposes delegated turns to plugins, including worker VMs.
+func (rt *Runtime) buildAgentsObject(vm *goja.Runtime) *goja.Object {
+	obj := vm.NewObject()
+	_ = obj.Set("run", func(raw map[string]any) map[string]any {
+		if rt.deps.Agents == nil {
+			panic(vm.NewGoError(errors.New("subagents are not available")))
+		}
+		prompt, _ := raw["prompt"].(string)
+		if strings.TrimSpace(prompt) == "" {
+			panic(vm.NewGoError(errors.New("prompt is required")))
+		}
+		req := AgentRequest{Prompt: prompt}
+		if value, ok := raw["preset"].(string); ok {
+			req.Preset = value
+		}
+		if value, ok := raw["model"].(string); ok {
+			req.Model = value
+		}
+		switch value := raw["max_steps"].(type) {
+		case int64:
+			req.MaxSteps = int(value)
+		case float64:
+			req.MaxSteps = int(value)
+		case int:
+			req.MaxSteps = value
+		}
+
+		result, err := rt.deps.Agents.RunChild(rt.currentCtx(), req)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return map[string]any{
+			"session_id":     result.SessionID,
+			"content":        result.Content,
+			"steps":          result.Steps,
+			"stopped_reason": result.StoppedReason,
+			"usage":          result.Usage,
 		}
 	})
 	return obj

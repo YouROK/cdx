@@ -220,10 +220,58 @@ func TestQuestionPromptAcceptsFreeText(t *testing.T) {
 	}
 }
 
-func TestQuestionPromptRejectsUnknownOption(t *testing.T) {
+func TestQuestionPromptUnknownUsesDefault(t *testing.T) {
 	p := buildQuestionPrompt(stepLimitQuestion(), 80)
 	answer := parseQuestionAnswer("maybe", p)
-	if answer["cancelled"] != true {
+	if answer["choice"] != "continue" {
 		t.Fatalf("unexpected answer: %+v", answer)
+	}
+}
+
+func TestQuestionPromptPermissionUnknownDenies(t *testing.T) {
+	p := buildQuestionPrompt(map[string]any{
+		"source": "plugin",
+		"kind":   "permission",
+		"title":  "Run the command?",
+		"options": []any{
+			map[string]any{"id": "once", "label": "Allow once"},
+			map[string]any{"id": "deny", "label": "Deny"},
+		},
+		"default": "once",
+	}, 80)
+	answer := parseQuestionAnswer("maybe", p)
+	if answer["choice"] != "deny" {
+		t.Fatalf("a typo must deny a permission, got %+v", answer)
+	}
+}
+
+func TestQuestionPromptUsesFirstOptionAsDefault(t *testing.T) {
+	raw := map[string]any{
+		"source": "plugin:ask",
+		"kind":   "model",
+		"title":  "Which one?",
+		"options": []any{
+			map[string]any{"id": "o1", "label": "Option A"},
+			map[string]any{"id": "o2", "label": "Option B"},
+		},
+	}
+	p := buildQuestionPrompt(raw, 80)
+	if p.prompt != "Choose [1]: " {
+		t.Fatalf("prompt = %q, want the first option as default", p.prompt)
+	}
+	if answer := parseQuestionAnswer("", p); answer["choice"] != "o1" {
+		t.Fatalf("Enter must pick the first option, got %+v", answer)
+	}
+}
+
+func TestQuestionPromptTextOnlyCancelsOnEmpty(t *testing.T) {
+	p := buildQuestionPrompt(map[string]any{
+		"source": "plugin:ask",
+		"kind":   "model",
+		"title":  "Name it",
+		"text":   true,
+	}, 80)
+	if answer := parseQuestionAnswer("", p); answer["cancelled"] != true {
+		t.Fatalf("empty text answer must cancel, got %+v", answer)
 	}
 }

@@ -37,6 +37,30 @@ type Options struct {
 
 type streamCtxKey struct{}
 
+// agentRunner runs delegated turns through the session orchestrator.
+type agentRunner struct {
+	sessions *session.Orchestrator
+}
+
+func (r agentRunner) RunChild(ctx context.Context, req plugin.AgentRequest) (plugin.AgentResult, error) {
+	result, err := r.sessions.RunChild(ctx, session.TurnRequest{
+		Prompt:   req.Prompt,
+		Preset:   req.Preset,
+		Model:    req.Model,
+		MaxSteps: req.MaxSteps,
+	})
+	if err != nil {
+		return plugin.AgentResult{}, err
+	}
+	return plugin.AgentResult{
+		SessionID:     result.Session.ID,
+		Content:       result.Content,
+		Steps:         result.Steps,
+		StoppedReason: result.StoppedReason,
+		Usage:         result.Usage,
+	}, nil
+}
+
 // clientAsker routes a question to the IPC client of the running turn.
 type clientAsker struct{}
 
@@ -108,15 +132,16 @@ func New(ctx context.Context, opts Options) (*Daemon, error) {
 	rt := router.New()
 	reg := plugin.NewRegistry()
 
+	sessOrch := session.NewOrchestrator(st, eb, reg, opts.Logger)
+
 	pm := plugin.NewManager(plugin.RuntimeDependencies{
 		Store:    st,
 		Bus:      eb,
 		Router:   rt,
 		Registry: reg,
 		Logger:   opts.Logger,
+		Agents:   agentRunner{sessions: sessOrch},
 	})
-
-	sessOrch := session.NewOrchestrator(st, eb, reg, opts.Logger)
 
 	d := &Daemon{
 		opts:     opts,

@@ -172,3 +172,18 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Run the tool in worker VMs through `cdx.questions.ask` so the control VM stays free.
 - [x] Return the chosen label, the typed answer, or a cancelled flag to the model.
 - [x] Cover choices, free text, and cancellation with a plugin test.
+
+## Stage 24: Question Defaults
+- [x] Resolve an option default (given, otherwise the first option) and let Enter accept it.
+- [x] Fall back to the default on unrecognized input; keep permission prompts fail-closed with deny.
+- [x] Let `ask_user` mark a recommended option as the default.
+- [x] Cover Enter, unknown input, permission deny, free text, and recommended defaults with tests.
+
+## Stage 25: Subagents
+- [x] Track the running turn in the context: session, root, depth, workdir, preset, and model.
+- [x] Create child sessions with `parent_id`, `root_id`, and `depth` without activating them.
+- [x] Run a delegated turn with `Orchestrator.RunChild` and cap the depth at `1`.
+- [x] Expose `cdx.agents.run` to plugins, including worker VMs, through an agent runner.
+- [x] Add the `subagent` tool plugin and the built-in `subagent` preset.
+- [x] Key session permission grants by the root session so they cover the tree.
+- [x] Cover child sessions, depth limits, stateless rejection, the tool, and the preset with tests.

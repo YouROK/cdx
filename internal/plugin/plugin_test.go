@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1406,11 +1407,15 @@ func TestAskPluginReturnsTheAnswer(t *testing.T) {
 	if len(q.Options) != 2 || q.Options[1].Label != "Option B" || !q.Text {
 		t.Fatalf("unexpected options: %+v", q.Options)
 	}
+	if q.Default != "o1" {
+		t.Fatalf("default = %q, want the first option", q.Default)
+	}
 
 	asker.answer = question.Answer{Text: "custom"}
 	res, err = reg.CallTool(ctx, "ask_user", map[string]any{
 		"question":   "Name it",
-		"options":    []any{"Option A"},
+		"options":    []any{"Option A", "Option B"},
+		"default":    "Option B",
 		"allow_text": true,
 	})
 	if err != nil {
@@ -1419,6 +1424,9 @@ func TestAskPluginReturnsTheAnswer(t *testing.T) {
 	out, _ = res.(map[string]any)
 	if out["answer"] != "custom" {
 		t.Fatalf("unexpected text answer: %+v", out)
+	}
+	if len(asker.questions) != 2 || asker.questions[1].Default != "o2" {
+		t.Fatalf("the recommended option must become the default: %+v", asker.questions)
 	}
 
 	asker.answer = question.Answer{Cancelled: true, Reason: "no interactive client"}
@@ -1429,5 +1437,74 @@ func TestAskPluginReturnsTheAnswer(t *testing.T) {
 	out, _ = res.(map[string]any)
 	if out["cancelled"] != true {
 		t.Fatalf("unexpected cancelled answer: %+v", out)
+	}
+}
+
+type fakeAgentRunner struct {
+	requests []AgentRequest
+	result   AgentResult
+	err      error
+}
+
+func (r *fakeAgentRunner) RunChild(_ context.Context, req AgentRequest) (AgentResult, error) {
+	r.requests = append(r.requests, req)
+	return r.result, r.err
+}
+
+func TestSubagentPluginDelegates(t *testing.T) {
+	tmp := t.TempDir()
+	st, err := store.Open(store.Options{
+		DBPath:        filepath.Join(tmp, "cdx.db"),
+		MasterKeyPath: filepath.Join(tmp, "master.key"),
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	runner := &fakeAgentRunner{result: AgentResult{SessionID: "ses_child", Content: "done", Steps: 3}}
+	reg := NewRegistry()
+	mgr := NewManager(RuntimeDependencies{
+		Store:    st,
+		Bus:      bus.New(),
+		Router:   router.New(),
+		Registry: reg,
+		Logger:   logx.New(),
+		Agents:   runner,
+	})
+	defer mgr.CloseAll()
+
+	if _, err := mgr.LoadPlugin(context.Background(), filepath.Join("..", "..", "plugins", "subagent")); err != nil {
+		t.Fatalf("load subagent plugin: %v", err)
+	}
+
+	res, err := reg.CallTool(context.Background(), "subagent", map[string]any{"prompt": "do the thing"})
+	if err != nil {
+		t.Fatalf("subagent failed: %v", err)
+	}
+	out, _ := res.(map[string]any)
+	if out["content"] != "done" || out["session_id"] != "ses_child" {
+		t.Fatalf("unexpected result: %+v", out)
+	}
+	if len(runner.requests) != 1 {
+		t.Fatalf("expected one delegated turn, got %d", len(runner.requests))
+	}
+	req := runner.requests[0]
+	if req.Prompt != "do the thing" || req.Preset != "subagent" {
+		t.Fatalf("unexpected request: %+v", req)
+	}
+
+	res, err = reg.CallTool(context.Background(), "subagent", map[string]any{"prompt": "   "})
+	if err != nil {
+		t.Fatalf("empty prompt must not fail the tool: %v", err)
+	}
+	out, _ = res.(map[string]any)
+	if out["error"] != "prompt is required" {
+		t.Fatalf("unexpected empty-prompt result: %+v", out)
+	}
+
+	runner.err = errors.New("subagent depth limit 1 is reached")
+	if _, err := reg.CallTool(context.Background(), "subagent", map[string]any{"prompt": "again"}); err == nil {
+		t.Fatal("a runner error must fail the tool call")
 	}
 }

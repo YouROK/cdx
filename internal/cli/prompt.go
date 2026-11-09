@@ -285,6 +285,7 @@ type questionPrompt struct {
 	options   []question.Option
 	def       string
 	allowText bool
+	strict    bool
 	prompt    string
 }
 
@@ -300,6 +301,7 @@ func buildQuestionPrompt(raw map[string]any, width int) questionPrompt {
 	p := questionPrompt{
 		def:       questionStringField(raw, "default"),
 		allowText: questionBoolField(raw, "text"),
+		strict:    kind == question.KindPermission,
 	}
 
 	switch kind {
@@ -340,6 +342,9 @@ func buildQuestionPrompt(raw map[string]any, width int) questionPrompt {
 		p.options = append(p.options, opt)
 	}
 
+	if p.def == "" && len(p.options) > 0 {
+		p.def = p.options[0].ID
+	}
 	if len(p.options) > 0 {
 		p.lines = append(p.lines, "")
 		for i, opt := range p.options {
@@ -372,9 +377,6 @@ func parseQuestionAnswer(answer string, p questionPrompt) map[string]any {
 		if p.def != "" {
 			return map[string]any{"choice": p.def}
 		}
-		if len(p.options) > 0 {
-			return map[string]any{"choice": p.options[0].ID}
-		}
 		return map[string]any{"cancelled": true, "reason": "no answer"}
 	}
 
@@ -405,6 +407,15 @@ func parseQuestionAnswer(answer string, p questionPrompt) map[string]any {
 	}
 	if p.allowText {
 		return map[string]any{"text": text}
+	}
+	if p.strict {
+		// A permission prompt must not fail open on a typo.
+		if id, ok := questionOptionID(p.options, "deny"); ok {
+			return map[string]any{"choice": id}
+		}
+	}
+	if p.def != "" {
+		return map[string]any{"choice": p.def}
 	}
 	return map[string]any{"cancelled": true, "reason": "unrecognized answer"}
 }

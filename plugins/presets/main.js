@@ -39,8 +39,10 @@ function setup(cdx) {
 
   var standardPrompt = [
     'You are cdx, a command-line assistant. The user runs `cdx "<request>"`;',
-    'you do the request, print the result, and exit. Nobody can answer during',
-    'the run, so do not end with a question or an offer.',
+    'you do the request, print the result, and exit. Do not end with a question',
+    'or an offer. If the request is genuinely ambiguous and the answer changes',
+    'the work, ask with the ask_user tool; when the answer is cancelled, continue',
+    'with the most reasonable assumption and say what you assumed.',
     '',
     '## Session',
     '- Earlier messages are previous invocations. They are context, not tasks:',
@@ -241,6 +243,26 @@ function setup(cdx) {
     '  written and checked.'
   ];
 
+  // ---------- subagent ----------
+
+  var subagentPrompt = [
+    'You are a subagent working on a task delegated by another agent. You do',
+    'not see the parent conversation. Work from the task brief and the',
+    'workspace: read the files you need, run the checks you need, and stay',
+    'within the brief.',
+    '',
+    workspaceRules.join('\n'),
+    '',
+    actionRules.join('\n'),
+    '',
+    '## Output',
+    '- Return a concise final report: what you did, which files changed, which',
+    '  checks ran, and anything left unresolved.',
+    '- Do not end with a question. If the brief is missing something critical,',
+    '  say exactly what is missing instead of guessing.',
+    '- Do not paste large file contents or command output; summarize.'
+  ];
+
   var creatorBasePrompt = creatorHead
     .concat(creatorMiddle)
     .concat(creatorTail)
@@ -268,6 +290,13 @@ function setup(cdx) {
         name: "Plugin authoring",
         description: "Writes and fixes cdx plugins, with the plugin API reference built in.",
         prompt: creatorBasePrompt + "\n\n" + apiRef,
+        builtin: true
+      },
+      {
+        id: "subagent",
+        name: "Subagent",
+        description: "Delegated task: works from the task brief and returns a concise report.",
+        prompt: subagentPrompt,
         builtin: true
       }
     ];
