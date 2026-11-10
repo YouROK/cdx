@@ -1,5 +1,12 @@
 # cdx
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="imgs/cdx-logo-transparent.png">
+    <img src="imgs/cdx-logo.png" alt="cdx - a command-line coding agent" width="320">
+  </picture>
+</p>
+
 A command-line coding agent with a microkernel architecture: the core provides
 the IPC transport, storage, the HTTP router, the plugin runtime, and the session
 loop; every feature - LLM providers, tools, permissions, context assembly, and
@@ -249,6 +256,7 @@ the implementation stages.
 
 ```text
 cmd/cdx/            entry point
+imgs/               logo artwork and its editable sources
 internal/           core: bus, ipc, router, plugin runtime, session loop, storage
 packaging/          nfpm config and the install/uninstall scripts for releases
 plugins/            default plugins, each with an optional React panel in web/
