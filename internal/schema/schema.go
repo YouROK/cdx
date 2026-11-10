@@ -2,6 +2,7 @@
 package schema
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -11,9 +12,45 @@ import (
 // FormatSecret marks a string property to be stored in the plugin's encrypted secrets namespace.
 const FormatSecret = "secret"
 
+// TypeName accepts the JSON Schema type keyword as a name or a union array.
+type TypeName string
+
+// UnmarshalJSON reads a type name or the first concrete entry of a union array.
+func (t *TypeName) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		*t = ""
+		return nil
+	}
+	switch trimmed[0] {
+	case '"':
+		var name string
+		if err := json.Unmarshal(trimmed, &name); err != nil {
+			return err
+		}
+		*t = TypeName(name)
+		return nil
+	case '[':
+		var names []string
+		if err := json.Unmarshal(trimmed, &names); err != nil {
+			return err
+		}
+		for _, name := range names {
+			if name != "null" {
+				*t = TypeName(name)
+				return nil
+			}
+		}
+		*t = ""
+		return nil
+	}
+	*t = ""
+	return nil
+}
+
 // Schema represents a JSON Schema object definition.
 type Schema struct {
-	Type        string               `json:"type"`
+	Type        TypeName             `json:"type"`
 	Title       string               `json:"title,omitempty"`
 	Description string               `json:"description,omitempty"`
 	Properties  map[string]*Property `json:"properties,omitempty"`
@@ -22,7 +59,7 @@ type Schema struct {
 
 // Property represents a single field inside a JSON Schema object.
 type Property struct {
-	Type        string               `json:"type"`
+	Type        TypeName             `json:"type"`
 	Title       string               `json:"title,omitempty"`
 	Description string               `json:"description,omitempty"`
 	Format      string               `json:"format,omitempty"`

@@ -100,6 +100,17 @@ func (r *Registry) RegisterTool(spec ToolSpec) error {
 	return nil
 }
 
+// RemoveTool deletes a tool by name and reports whether it existed.
+func (r *Registry) RemoveTool(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.tools[name]; !ok {
+		return false
+	}
+	delete(r.tools, name)
+	return true
+}
+
 // ListTools returns all registered tools in alphabetical order.
 func (r *Registry) ListTools() []ToolSpec {
 	r.mu.RLock()

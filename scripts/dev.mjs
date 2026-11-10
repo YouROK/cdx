@@ -8,7 +8,8 @@ const configs = [
   "plugins/webui/web/vite.config.js",
   "plugins/providers/web/vite.config.js",
   "plugins/presets/web/vite.config.js",
-  "plugins/permissions/web/vite.config.js"
+  "plugins/permissions/web/vite.config.js",
+  "plugins/mcp/web/vite.config.js"
 ];
 
 function run(args) {

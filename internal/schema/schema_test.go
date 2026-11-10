@@ -74,3 +74,44 @@ func TestSchemaValidateAndSplitSecrets(t *testing.T) {
 		t.Fatalf("expected base_url in plain map, got %v", plain["base_url"])
 	}
 }
+
+// TestParseAcceptsUnionTypes covers MCP schemas that use nullable unions and unknown keywords.
+func TestParseAcceptsUnionTypes(t *testing.T) {
+	raw := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name":  map[string]any{"type": []any{"string", "null"}},
+			"count": map[string]any{"type": []any{"null", "integer"}, "minimum": float64(1)},
+			"data":  map[string]any{"anyOf": []any{map[string]any{"type": "string"}}},
+			"items": map[string]any{"type": "array", "items": map[string]any{"type": []any{"string", "null"}}},
+		},
+		"$defs":                map[string]any{"unused": map[string]any{"type": "string"}},
+		"additionalProperties": false,
+	}
+	s, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if s.Properties["name"].Type != "string" {
+		t.Fatalf("union type was not resolved: %q", s.Properties["name"].Type)
+	}
+	if s.Properties["count"].Type != "integer" {
+		t.Fatalf("nullable integer was not resolved: %q", s.Properties["count"].Type)
+	}
+	if _, err := s.Validate(map[string]any{"name": "ok", "count": int64(2)}); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if _, err := s.Validate(map[string]any{"count": int64(0)}); err == nil {
+		t.Fatal("expected the minimum bound to apply")
+	}
+}
+
+// TestParseAcceptsRootTypeArray covers a root declared as a union.
+func TestParseAcceptsRootTypeArray(t *testing.T) {
+	if _, err := Parse(map[string]any{"type": []any{"object", "null"}}); err != nil {
+		t.Fatalf("root union rejected: %v", err)
+	}
+	if _, err := Parse(map[string]any{"type": []any{"string"}}); err == nil {
+		t.Fatal("a non-object root was accepted")
+	}
+}

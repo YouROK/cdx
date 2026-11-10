@@ -66,6 +66,7 @@ function setup(cdx) {
 * `cdx.worker` (boolean) - `true` inside an isolated worker VM started for `workers > 0`.
 * `cdx.workdir()` (string) - the active session working directory. Tool handlers should resolve relative paths and the default shell directory against it.
 * `cdx.inWorker(fn)` - marks a provider `complete` handler or tool handler for execution in a worker VM. Without the marker the function runs in the control VM.
+* `cdx.after(ms, fn)` - runs a callback on the control VM after a delay; returns `false` in worker VMs. Use it to refresh a catalog after `setup` instead of blocking startup.
 * `cdx.apiDoc()` (string) - returns the live Markdown Plugin API Reference generated directly from the Go host definitions.
 
 ### 4.2. Logging (`cdx.log`)
@@ -112,6 +113,7 @@ Isolated per-plugin **AES-256-GCM** encrypted bucket (`plugin_secrets:<id>`) in 
   ```
 
   Wrap the handler with `cdx.inWorker(...)` to run it in a worker VM when `workers > 0`. The handler and `state` must not rely on mutable JS variables from the control VM; use `cdx.storage`/`cdx.secrets` for shared state. Relative filesystem paths and the default shell directory should be resolved against `cdx.workdir()`.
+* `cdx.tools.remove(name)` -> removes a registered tool by name and returns whether it existed; a no-op in worker VMs. Use it when a dynamic catalog changes.
 * `cdx.tools.list()` -> returns all registered tool specifications.
 
 ### 4.6. LLM Providers (`cdx.providers`)
@@ -226,7 +228,28 @@ export function mount(container, api) {
 
 The container is a `ShadowRoot`, so panel CSS does not leak into the shell. The shell injects its base stylesheet and the descriptors from `styles` before mounting the panel. Use `api.render` for React panels so render failures stay inside the panel instead of breaking the dashboard.
 
-The injected stylesheet covers the dashboard form classes: `.panel`, `.form-stack`, `.grid-2`, `.grid-3`, `label`, `.field-hint`, `.btn`, `.btn-primary`, `.badge`, and the input, select, and textarea controls. Text fields take the full width of their label and textareas do not resize, so a panel with these classes lines up with the rest of the dashboard. A field is title, control, hint, in that order: the title above the control and the hint below it. A checkbox is a control too: give it a `.check-field` box of input height with the checkbox and its label inside, so it lines up with the text fields. A list of checkboxes uses `.checkbox-row`, which keeps the checkbox and its caption on one line. A long explanation belongs behind a question mark, not in a paragraph under the control. For anything else, pass CSS to `api.addStyles(css)`; it appends a style tag to the panel shadow root and returns a cleanup function.
+The injected stylesheet covers the dashboard form classes: `.panel`, `.form-stack`, `.grid-2`, `.grid-3`, `label`, `.field-title`, `.field-hint`, `.btn`, `.btn-primary`, `.badge`, and the input, select, and textarea controls. Text fields take the full width of their label and textareas do not resize, so a panel with these classes lines up with the rest of the dashboard.
+
+Every field is **title, control, hint**, in that order:
+
+1. a title above the control; wrap it in `<span className="field-title">` when it needs a question-mark hint;
+2. the control itself;
+3. an optional hint in `<span className="field-hint">` below it.
+
+A checkbox is a field too and follows the same order. Give it a title and a hint like any other control, and put the box in a `.check-field` of input height with a short caption inside, so it lines up with the text fields:
+
+```jsx
+<label>
+  <span className="field-title">Use by default</span>
+  <span className="check-field">
+    <input type="checkbox" checked={form.default} onChange={handleDefault} />
+    <span>Enabled</span>
+  </span>
+  <span className="field-hint">One model is the default for the whole program.</span>
+</label>
+```
+
+Keep the caption inside the box short (`Enabled`); the explanation goes in the hint, or behind a question mark when it is long. A list of checkboxes uses `.checkbox-row`, which keeps the checkbox and its caption on one line. For anything else, pass CSS to `api.addStyles(css)`; it appends a style tag to the panel shadow root and returns a cleanup function.
 
 React page panels use the shell-provided React runtime. The import map exposes `react`, `react/jsx-runtime`, `react-dom`, and `react-dom/client`; keep those imports external when building:
 
@@ -281,3 +304,25 @@ The legacy `window.CDXPluginPanels` registry is not used. New page panels are ES
 * `cdx.agents.runMany({ prompts, preset?, model?, max_steps? })` -> `{ results: [...] }`.
   * Runs up to `8` independent child turns in parallel and returns their results in the input order. Each result has the same fields as `run`, plus `error` for a failed child.
   * The default `subagent` tool uses this with its `tasks` array; a single `prompt` stays one child. Separate tool calls remain sequential, so use `tasks` for real parallelism.
+
+### 4.15. MCP Servers (`cdx.mcp`)
+
+`cdx.mcp` connects to [Model Context Protocol](https://modelcontextprotocol.io) servers and exposes their tools. It works in worker VMs, like `cdx.questions` and `cdx.agents`: a connection opened by any VM is shared, and the plugin closes it when it is unloaded.
+
+* `cdx.mcp.connect(config)` -> `{ id, connected, revision, server, tools }`:
+  * `id` - server id, required; also the key of the shared connection.
+  * `transport` - `"stdio"` (default) or `"http"`.
+  * stdio: `command`, optional `args`, `env`, `cwd`. The server starts lazily in `cwd`, which defaults to the active session working directory; the same directory is advertised as an MCP root.
+  * http: `url`, optional `headers`. Streamable HTTP is used, with a fallback to the deprecated HTTP+SSE transport.
+  * `protocol` - `"auto"` (default) or a fixed revision such as `"2026-07-28"` or `"2025-06-18"`.
+  * `timeout_ms` - per-request timeout, default `120000`.
+  * Connecting an id that is already live returns the same connection.
+* `cdx.mcp.call(server, tool, arguments)` -> `{ content, structuredContent, isError }`; protocol errors are thrown as JS exceptions, and `isError` stays in the result for the caller to map.
+* `cdx.mcp.listTools(server)` -> the tool catalog of a connected server.
+* `cdx.mcp.listResources(server)` -> the resource catalog of a connected server.
+* `cdx.mcp.readResource(server, uri)` -> `{ contents }` where each entry has `uri`, `mimeType`, and `text` or `blob`.
+* `cdx.mcp.status(server)` -> `{ id, connected, revision, server }`.
+* `cdx.mcp.servers()` -> ids connected for this plugin.
+* `cdx.mcp.close(server)` -> closes one connection and returns whether it existed.
+
+The core answers the server requests a connection needs: `roots/list` returns the turn working directory, and `elicitation/create` is asked through `cdx.questions` (one question per requested field). Servers are dual-era: revision `2026-07-28` uses per-request metadata and `server/discover`, older servers keep the `initialize` handshake.

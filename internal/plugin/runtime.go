@@ -18,6 +18,7 @@ import (
 
 	"github.com/yourok/cdx/internal/bus"
 	"github.com/yourok/cdx/internal/logx"
+	"github.com/yourok/cdx/internal/mcp"
 	"github.com/yourok/cdx/internal/question"
 	"github.com/yourok/cdx/internal/router"
 	"github.com/yourok/cdx/internal/schema"
@@ -77,6 +78,7 @@ type RuntimeDependencies struct {
 	Logger   *logx.Logger
 	Agents   AgentRunner
 	Sys      *SysAPI
+	MCP      *mcp.Manager
 }
 
 // Runtime manages a single plugin running inside its own dedicated Goja VM goroutine.
@@ -103,6 +105,15 @@ type Runtime struct {
 	workersFailed  bool
 	workerTools    map[string]goja.Callable
 	workerComplete goja.Callable
+
+	timerMu sync.Mutex
+	timers  []*afterJob
+}
+
+// afterJob is a deferred callback scheduled with cdx.after.
+type afterJob struct {
+	timer *time.Timer
+	done  chan struct{}
 }
 
 // StartRuntime initializes the Goja VM for a plugin, binds the cdx object, and runs its entry script.
@@ -207,6 +218,16 @@ func (rt *Runtime) Close() {
 		}
 		if rt.deps.Registry != nil {
 			rt.deps.Registry.UnregisterPlugin(rt.manifest.ID)
+		}
+		rt.timerMu.Lock()
+		jobs := rt.timers
+		rt.timers = nil
+		rt.timerMu.Unlock()
+		for _, job := range jobs {
+			job.timer.Stop()
+		}
+		if rt.mode == modePrimary && rt.deps.MCP != nil {
+			rt.deps.MCP.CloseOwner(rt.owner)
 		}
 		close(rt.done)
 	})
@@ -458,6 +479,47 @@ func (rt *Runtime) execOnVM(ctx context.Context, fn func(vm *goja.Runtime) (any,
 	}
 }
 
+// scheduleAfter runs a callback on the plugin control VM after the delay.
+func (rt *Runtime) scheduleAfter(ms int, fn goja.Callable) bool {
+	if rt.mode != modePrimary || fn == nil {
+		return false
+	}
+	delay := time.Duration(ms) * time.Millisecond
+	if delay < 0 {
+		delay = 0
+	}
+	if delay > time.Hour {
+		delay = time.Hour
+	}
+
+	job := &afterJob{done: make(chan struct{})}
+	job.timer = time.AfterFunc(delay, func() {
+		defer close(job.done)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, err := rt.execOnVM(ctx, func(vm *goja.Runtime) (any, error) {
+			_, callErr := fn(goja.Undefined())
+			return nil, callErr
+		})
+		if err != nil {
+			rt.logScope.Debug("Deferred callback failed: %v", err)
+		}
+	})
+
+	rt.timerMu.Lock()
+	kept := rt.timers[:0]
+	for _, existing := range rt.timers {
+		select {
+		case <-existing.done:
+		default:
+			kept = append(kept, existing)
+		}
+	}
+	rt.timers = append(kept, job)
+	rt.timerMu.Unlock()
+	return true
+}
+
 func (rt *Runtime) bindCDX(vm *goja.Runtime) {
 	cdxObj := vm.NewObject()
 	_ = cdxObj.Set("id", rt.manifest.ID)
@@ -476,6 +538,7 @@ func (rt *Runtime) bindCDX(vm *goja.Runtime) {
 		_ = obj.Set("fn", call.Arguments[0])
 		return obj
 	})
+	_ = cdxObj.Set("after", func(ms int, fn goja.Callable) bool { return rt.scheduleAfter(ms, fn) })
 	_ = cdxObj.Set("apiDoc", RenderAPIDoc)
 	_ = cdxObj.Set("log", rt.buildLogObject(vm))
 	_ = cdxObj.Set("storage", rt.buildStorageObject(vm))
@@ -490,6 +553,7 @@ func (rt *Runtime) bindCDX(vm *goja.Runtime) {
 	_ = cdxObj.Set("tools", rt.buildToolsObject(vm))
 	_ = cdxObj.Set("providers", rt.buildProvidersObject(vm))
 	_ = cdxObj.Set("plugins", rt.buildPluginsObject(vm))
+	_ = cdxObj.Set("mcp", rt.buildMCPObject(vm))
 	_ = cdxObj.Set("sys", rt.buildSysObject(vm))
 
 	_ = vm.Set("cdx", cdxObj)
@@ -1200,6 +1264,12 @@ func (rt *Runtime) buildToolsObject(vm *goja.Runtime) *goja.Object {
 		if err != nil {
 			panic(vm.NewGoError(err))
 		}
+	})
+	_ = obj.Set("remove", func(name string) bool {
+		if rt.mode == modeWorker || rt.deps.Registry == nil {
+			return false
+		}
+		return rt.deps.Registry.RemoveTool(name)
 	})
 	_ = obj.Set("list", func() []ToolSpec {
 		if rt.deps.Registry == nil {

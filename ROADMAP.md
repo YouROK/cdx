@@ -205,3 +205,45 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Store a short title from the first prompt and show it in the CLI and web session lists.
 - [x] Group sub-sessions under the parent with a spoiler in the web UI.
 - [x] Cascade session deletion to all children.
+
+## Stage 29: MCP Client Core (stdio)
+- [x] Add `internal/mcp`: JSON-RPC 2.0 framing, request correlation, per-request timeouts, and cancellation.
+- [x] Implement the stdio transport with a process group, stderr logging, large messages, and crash detection.
+- [x] Detect the protocol era with `server/discover` and the legacy `initialize` fallback, carry `_meta` on modern requests, and allow a forced revision.
+- [x] Implement `tools/list` with pagination and `tools/call` with content, structured output, and error mapping.
+- [x] Add a connection manager keyed by plugin and server, closed on plugin unload.
+- [x] Cover legacy and modern fake servers, concurrent calls, timeout, cancellation, and crash with tests.
+
+## Stage 30: MCP Client HTTP and Server Interaction
+- [x] Implement Streamable HTTP with JSON and SSE responses, the protocol version header, and one POST per message.
+- [x] Support the legacy `Mcp-Session-Id` handshake and the `2024-11-05` HTTP+SSE transport fallback.
+- [x] Accept server notifications: progress, list changes, and the `subscriptions/listen` stream.
+- [x] Return `input_required` results to a client input handler that retries the request with `inputResponses` and `requestState`.
+- [x] Cover the HTTP transport, SSE streaming, session handoff, and notifications with tests.
+
+## Stage 31: MCP Host API and Plugin
+- [x] Expose `cdx.mcp` to plugins, including worker VMs, and close the plugin's connections on unload.
+- [x] Add a deferred callback (`cdx.after`) so a plugin can refresh its catalog without blocking `setup`.
+- [x] Let the registry remove tools, so a refresh drops the tools a server no longer reports.
+- [x] Accept MCP JSON Schema unions and ignore unsupported keywords in the schema engine.
+- [x] Add `plugins/mcp`: configuration, encrypted secrets, lazy connect, tool naming, permission mapping, and working directory rules.
+- [x] Route elicitation and roots input requests through `cdx.questions` and the turn working directory.
+- [x] Cover discovery, direct and gateway exposure, refresh, and permission mapping with tests.
+
+## Stage 32: MCP Settings Page
+- [x] Add a React page panel with the server list, connection status, tool catalog, and last error.
+- [x] Add, edit, delete, enable, and test a server, with the exact command shown before it is saved.
+- [x] Import an `mcp.json` file in the Claude Desktop and Cursor format with a review step.
+- [x] Store environment values and headers as secrets and mask them in API responses.
+- [x] Add refresh and reconnect actions with progress feedback.
+
+## Stage 33: MCP Resources and Context Budget
+- [x] Expose `resources/list` and `resources/read` as built-in tools.
+- [x] Add the `direct`, `gateway`, and `off` exposure modes with a tool-count threshold.
+- [x] Cap and truncate MCP tool descriptions and results.
+- [x] Keep the system prompt and provider tool payload within the configured budget.
+
+## Stage 34: MCP Documentation and End-to-End
+- [x] Document the plugin, the server configuration, and the protocols in `MCP.md`, `PLUGINS.md`, and `README.md`.
+- [x] Add a daemon test with a fake MCP server that runs a full turn calling its tool.
+- [x] Verify installation and packaging of the new plugin.

@@ -19,6 +19,7 @@ import (
 	"github.com/yourok/cdx/internal/bus"
 	"github.com/yourok/cdx/internal/ipc"
 	"github.com/yourok/cdx/internal/logx"
+	"github.com/yourok/cdx/internal/mcp"
 	"github.com/yourok/cdx/internal/paths"
 	"github.com/yourok/cdx/internal/plugin"
 	"github.com/yourok/cdx/internal/question"
@@ -124,6 +125,7 @@ type Daemon struct {
 	registry *plugin.Registry
 	plugins  *plugin.Manager
 	sessions *session.Orchestrator
+	mcp      *mcp.Manager
 	ipcSrv   *ipc.Server
 	httpSrv  *http.Server
 	httpLn   net.Listener
@@ -164,6 +166,7 @@ func New(ctx context.Context, opts Options) (*Daemon, error) {
 
 	sessOrch := session.NewOrchestrator(st, eb, reg, opts.Logger)
 
+	mcpManager := mcp.NewManager()
 	pm := plugin.NewManager(plugin.RuntimeDependencies{
 		Store:    st,
 		Bus:      eb,
@@ -171,6 +174,7 @@ func New(ctx context.Context, opts Options) (*Daemon, error) {
 		Registry: reg,
 		Logger:   opts.Logger,
 		Agents:   agentRunner{sessions: sessOrch},
+		MCP:      mcpManager,
 	})
 
 	d := &Daemon{
@@ -182,6 +186,7 @@ func New(ctx context.Context, opts Options) (*Daemon, error) {
 		registry: reg,
 		plugins:  pm,
 		sessions: sessOrch,
+		mcp:      mcpManager,
 		stopCh:   make(chan struct{}),
 	}
 
@@ -257,6 +262,7 @@ func (d *Daemon) Stop() {
 		if d.plugins != nil {
 			d.plugins.CloseAll()
 		}
+		d.mcp.CloseAll()
 		if d.store != nil {
 			_ = d.store.Close()
 		}

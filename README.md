@@ -209,6 +209,25 @@ While a question waits in the terminal, that plugin is busy: opening its own
 settings page shows "Waiting for the plugin" and refreshes by itself once the
 answer is given. Other pages keep working.
 
+## MCP servers
+
+The MCP page connects cdx to [Model Context Protocol](https://modelcontextprotocol.io)
+servers, either a local program over stdio (`npx -y @modelcontextprotocol/server-filesystem .`)
+or an HTTP endpoint. The page can also import an `mcp.json` file in the Claude
+Desktop and Cursor format; values from `env` and `headers` are moved into the
+encrypted secrets and masked in the API.
+
+Each server's tools are offered to the model as `mcp__<server>__<tool>`, with
+the permission level taken from the tool annotations unless the server entry
+overrides it, so the Permissions page applies to them like any other tool. A
+stdio server starts lazily in the session working directory, which is also
+advertised as an MCP root, so file-based servers resolve relative paths inside
+the project. Automatic exposure keeps a server with more than 20 tools behind a
+single `mcp_call` gateway and caps the direct tool list at 48 across servers;
+resources are available through `mcp_list_resources` and `mcp_read_resource`.
+Server requests such as elicitation become normal cdx questions, and both the
+modern `2026-07-28` revision and the earlier handshake-based ones are supported.
+
 ## Plugins
 
 | Plugin | Role |
@@ -219,6 +238,7 @@ answer is given. Other pages keep working.
 | `permissions` | Tool call policies, outside-folder policy, remembered grants, approval prompts |
 | `context` | System prompt, `AGENTS.md`, history compaction |
 | `tools-local` | Filesystem and shell tools |
+| `mcp` | Model Context Protocol servers and their tools |
 | `webui` | Dashboard shell: navigation, schema forms, page panels |
 
 `PLUGINS.md` documents the manifest, the `cdx` host API, and both kinds of

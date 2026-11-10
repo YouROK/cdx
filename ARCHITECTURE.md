@@ -138,7 +138,14 @@ The bus connects the core and all plugins without coupling them together. It sup
   4. If the LLM requests tool calls, runs `tool:before_call` hooks. When a hook attaches an `ask` question, the core asks the client, runs `tool:decided`, and only then executes the target tool plugin; it then runs `tool:after_call` hooks and feeds results back to the provider plugin.
   5. Persists turn history and emits completion events.
 
-### 3.8. IPC & CLI (`internal/ipc`, `internal/cli`)
+### 3.8. MCP Client (`internal/mcp`)
+* Speaks the Model Context Protocol to external tool servers over **stdio** (a subprocess started by `cdx`) and **Streamable HTTP** (one endpoint, JSON or SSE replies), with a fallback to the deprecated HTTP+SSE transport.
+* Is **dual-era**: modern requests carry the protocol version and capabilities in `_meta` after `server/discover`, while servers on `2025-11-25` and earlier keep the `initialize` handshake with `Mcp-Session-Id` for HTTP.
+* Owns the parts a JS plugin cannot own: one reader per connection, JSON-RPC request correlation across worker VMs, process lifetime with a process group, per-request timeouts, cancellation, and the connection manager keyed by plugin and server.
+* Exposes the connection to plugins through `cdx.mcp`, which works in worker VMs like `cdx.questions` and `cdx.agents`. Tool handlers therefore never block the plugin control VM.
+* Deliberately keeps MCP policy out of the core: the `mcp` plugin owns configuration, secrets, tool naming, exposure modes, permission mapping, and the settings page.
+
+### 3.9. IPC & CLI (`internal/ipc`, `internal/cli`)
 * Framed streaming protocol over a Unix domain socket.
 * Supports live token deltas, progress spinners, and interactive permission prompts from the daemon back to the CLI terminal.
 * Output adapts to the destination: progress, reasoning, colors, and the bell appear only when stdout is a terminal. Pipes and redirects receive plain final content, while `--quiet` disables progress and `--json` prints the final result as JSON.
@@ -168,3 +175,4 @@ Default plugins live in `plugins/` and are installed into the plugin directory v
 7. **`plugins/tools-local`**: Provides filesystem and shell tools (`read_file`, `write_file`, `edit_file`, `list_dir`, `shell`) to the model.
 8. **`plugins/ask`**: Registers the `ask_user` tool, so the model can ask a question with optional choices or a free-text answer. The tool runs in a worker VM and uses `cdx.questions.ask`, so the plugin control VM stays responsive while the user answers.
 9. **`plugins/subagent`**: Registers the `subagent` tool, which delegates one self-contained task, or up to 8 independent tasks in parallel, to child sessions through `cdx.agents.run` and `cdx.agents.runMany`. The children use the `subagent` preset, work in the same directory, and return concise final reports as the tool result.
+10. **`plugins/mcp`**: Connects to MCP servers over `cdx.mcp`, discovers their tools, and registers them as `mcp__<server>__<tool>` for the model. Owns server configuration, encrypted environment values and headers, the automatic/direct/gateway/off exposure modes, permission mapping from tool annotations, resource tools, and the MCP settings page. A stdio server starts lazily in the active session working directory, which is also advertised as its MCP root.

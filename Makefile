@@ -63,7 +63,7 @@ fmt:
 	gofmt -w cmd internal test
 
 clean:
-	rm -rf bin dist plugins/webui/web/dist plugins/providers/web/dist plugins/presets/web/dist plugins/permissions/web/dist
+	rm -rf bin dist plugins/webui/web/dist plugins/providers/web/dist plugins/presets/web/dist plugins/permissions/web/dist plugins/mcp/web/dist
 
 install:
 	@test -x "$(BIN)" || { \

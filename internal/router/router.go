@@ -215,6 +215,24 @@ func (r *Router) rebuildLocked() {
 	eng := gin.New()
 	eng.Use(gin.Recovery())
 
+	// Plugin assets are revalidated on every load, so a rebuilt panel replaces
+	// the cached bundle without a hard refresh.
+	if len(r.statics) > 0 {
+		prefixes := make([]string, 0, len(r.statics))
+		for _, st := range r.statics {
+			prefixes = append(prefixes, st.prefix)
+		}
+		eng.Use(func(c *gin.Context) {
+			for _, prefix := range prefixes {
+				if matchesPrefix(c.Request.URL.Path, prefix) {
+					c.Header("Cache-Control", "no-cache")
+					break
+				}
+			}
+			c.Next()
+		})
+	}
+
 	// Attach prefix-scoped or global plugin middlewares.
 	for _, mw := range r.middlewares {
 		entry := mw

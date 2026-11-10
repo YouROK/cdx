@@ -3,11 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm run build:webui && npm run build:providers && npm run build:presets && npm run build:permissions",
+    "build": "npm run build:webui && npm run build:providers && npm run build:presets && npm run build:permissions && npm run build:mcp",
     "build:webui": "rm -rf plugins/webui/web/dist && vite build --config plugins/webui/web/vite.vendor.config.js && vite build --config plugins/webui/web/vite.config.js",
     "build:providers": "vite build --config plugins/providers/web/vite.config.js",
     "build:presets": "vite build --config plugins/presets/web/vite.config.js",
     "build:permissions": "vite build --config plugins/permissions/web/vite.config.js",
+    "build:mcp": "vite build --config plugins/mcp/web/vite.config.js",
     "test": "node --test plugins/webui/web/src/*.test.js",
     "dev": "node scripts/dev.mjs"
   },

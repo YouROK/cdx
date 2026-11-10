@@ -106,6 +106,9 @@ func TestStaticAndUIDescriptors(t *testing.T) {
 	if w.Code != http.StatusOK || w.Body.String() != "console.log(1);" {
 		t.Fatalf("unexpected static response: %d %s", w.Code, w.Body.String())
 	}
+	if cache := w.Header().Get("Cache-Control"); cache != "no-cache" {
+		t.Fatalf("static assets must be revalidated, got Cache-Control %q", cache)
+	}
 
 	uis := r.ListUI()
 	if len(uis) != 2 || uis[0].PluginID != "general" || uis[1].PluginID != "providers" {
