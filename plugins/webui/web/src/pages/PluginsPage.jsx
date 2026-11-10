@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiFetch, postJSON } from "../api.js";
 import { useUI } from "../ui.jsx";
 
@@ -8,6 +8,17 @@ export function PluginsPage({ onChanged }) {
   const [url, setUrl] = useState("");
   const [installing, setInstalling] = useState(false);
   const [details, setDetails] = useState(null);
+
+  // External and user plugins first, built-ins next, zero-priority plugins last.
+  const sortedPlugins = useMemo(() => {
+    return [...plugins].sort((a, b) => {
+      const byOrder = (Number(b.order) || 0) - (Number(a.order) || 0);
+      if (byOrder !== 0) return byOrder;
+      const byName = String(a.name || a.id).localeCompare(String(b.name || b.id));
+      if (byName !== 0) return byName;
+      return String(a.id).localeCompare(String(b.id));
+    });
+  }, [plugins]);
 
   async function loadPlugins() {
     try {
@@ -104,7 +115,7 @@ export function PluginsPage({ onChanged }) {
             </tr>
           </thead>
           <tbody>
-            {plugins.map((plugin) => (
+            {sortedPlugins.map((plugin) => (
               <tr key={plugin.id}>
                 <td>
                   <div className="fw-600">
