@@ -258,7 +258,7 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 ## Stage 36: Translation Catalog Plugin
 - [x] Add `plugins/i18n` with `order: 0` and the base English catalog.
 - [x] Accept translation tables over `i18n:register` on the control VM and merge them by plugin priority.
-- [x] Serve the merged catalog to plugins and the web shell, store the selected language, and expose the `Translations` page.
+- [x] Serve the merged catalog to plugins and the web shell, store the selected language, and expose the `Language` page.
 - [x] Drop a plugin's tables on `plugin:disabled` and `plugin:removed`.
 - [x] Cover layering, English fallback, locale switch, disable, enable, and reload with a plugin test.
 

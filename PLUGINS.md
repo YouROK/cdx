@@ -339,7 +339,7 @@ The legacy `window.CDXPluginPanels` registry is not used. New page panels are ES
 
 The core answers the server requests a connection needs: `roots/list` returns the turn working directory, and `elicitation/create` is asked through `cdx.questions` (one question per requested field). Servers are dual-era: revision `2026-07-28` uses per-request metadata and `server/discover`, older servers keep the `initialize` handshake.
 
-### 4.16. Translations (`i18n`)
+### 4.16. Interface Language (`i18n`)
 
 The `i18n` plugin merges flat translation tables from all plugins and serves the catalog for the selected language. It loads first (`order: 0`) and keeps its own English base catalog.
 

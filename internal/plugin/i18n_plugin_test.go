@@ -100,7 +100,7 @@ func TestI18nPluginCatalogLayersAndLocale(t *testing.T) {
 	if en["pack.Message"] != "High" {
 		t.Fatalf("en layer order is wrong: %q", en["pack.Message"])
 	}
-	if en["i18n.Title"] != "Translations" {
+	if en["i18n.Title"] != "Language" {
 		t.Fatalf("base catalog is missing: %q", en["i18n.Title"])
 	}
 
@@ -117,7 +117,7 @@ func TestI18nPluginCatalogLayersAndLocale(t *testing.T) {
 	if ru["pack.Message"] != "Высокий" {
 		t.Fatalf("ru layer order is wrong: %q", ru["pack.Message"])
 	}
-	if ru["i18n.Title"] != "Translations" {
+	if ru["i18n.Title"] != "Language" {
 		t.Fatalf("ru catalog does not fall back to en: %q", ru["i18n.Title"])
 	}
 
