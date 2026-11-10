@@ -9,7 +9,7 @@ const POLL_MS = 800;
 // LiveSessionPage follows the turn running in a session: the current model
 // steps at the bottom and a few stored messages above them.
 export function LiveSessionPage({ sessionId, onBack, onOpenHistory }) {
-  const { toast } = useUI();
+  const { toast, t } = useUI();
   const [detail, setDetail] = useState(null);
   const [live, setLive] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -104,13 +104,13 @@ export function LiveSessionPage({ sessionId, onBack, onOpenHistory }) {
       <div>
         <div className="page-header">
           <h3>
-            Live session: <span className="mono">{sessionId}</span>
+            {t("webui.Live.Title")}: <span className="mono">{sessionId}</span>
           </h3>
           <button type="button" className="btn btn-default btn-xs" onClick={onBack}>
-            &larr; Back to sessions
+            &larr; {t("webui.Live.Back")}
           </button>
         </div>
-        <p className="muted">{loading ? "Loading session..." : "Session was not found."}</p>
+        <p className="muted">{loading ? t("webui.Live.Loading") : t("webui.Live.NotFound")}</p>
       </div>
     );
   }
@@ -132,42 +132,40 @@ export function LiveSessionPage({ sessionId, onBack, onOpenHistory }) {
       <div className="page-header">
         <div>
           <h3>
-            Live session: <span className="mono">{session.id || sessionId}</span>
+            {t("webui.Live.Title")}: <span className="mono">{session.id || sessionId}</span>
           </h3>
           <div className="mono text-xs muted">{session.workdir || ""}</div>
         </div>
         <div className="row-gap-xs">
           <LiveStatus running={running} offline={offline} />
           <button type="button" className="btn btn-default btn-xs" onClick={onOpenHistory}>
-            Full history
+            {t("webui.Live.FullHistory")}
           </button>
           <button type="button" className="btn btn-default btn-xs" onClick={onBack}>
-            &larr; Back to sessions
+            &larr; {t("webui.Live.Back")}
           </button>
         </div>
       </div>
 
       <p className="page-intro">
-        {running
-          ? "The running turn updates here every second. Only the newest messages are shown; open the full history for everything else."
-          : "No turn is running. The newest messages are shown; open the full history for everything else."}
+        {running ? t("webui.Live.IntroRunning") : t("webui.Live.IntroIdle")}
       </p>
 
       {split.earlier.length === 0 ? (
-        <p className="muted">{running ? "No messages before this turn." : "No messages yet."}</p>
+        <p className="muted">{running ? t("webui.Live.NoneBefore") : t("webui.Live.NoneYet")}</p>
       ) : (
         <div className="live-section-head">
-          <h4>{running ? "Earlier messages" : "Recent messages"}</h4>
+          <h4>{running ? t("webui.Live.Earlier") : t("webui.Live.Recent")}</h4>
           <span className="text-xs muted">
-            {split.earlier.length} stored
-            {hidden > 0 ? " · " + hidden + " hidden" : ""}
+            {t("webui.Live.Stored", { count: split.earlier.length })}
+            {hidden > 0 ? " · " + t("webui.Live.Hidden", { count: hidden }) : ""}
           </span>
         </div>
       )}
 
       {hidden > 0 ? (
         <button type="button" className="btn btn-default btn-xs mb-xs" onClick={showEarlier}>
-          Show {Math.min(hidden, EARLIER_PAGE_SIZE)} earlier {hidden === 1 ? "message" : "messages"}
+          {t("webui.Live.ShowEarlier", { count: Math.min(hidden, EARLIER_PAGE_SIZE) })}
         </button>
       ) : null}
 
@@ -181,15 +179,16 @@ export function LiveSessionPage({ sessionId, onBack, onOpenHistory }) {
 
       {!running && live?.error ? (
         <div className="panel error-panel mt-md">
-          <h4 className="m-0 mb-xs">The last turn failed</h4>
+          <h4 className="m-0 mb-xs">{t("webui.Live.LastFailed")}</h4>
           <p className="muted m-0">{live.error}</p>
         </div>
       ) : null}
 
       {!running && live?.finished_at ? (
         <p className="muted text-xs mt-md">
-          Last turn {live.error ? "failed" : "finished"} at{" "}
-          {new Date(live.finished_at * 1000).toLocaleTimeString()}
+          {t(live.error ? "webui.Live.LastFailedAt" : "webui.Live.LastFinishedAt", {
+            time: new Date(live.finished_at * 1000).toLocaleTimeString()
+          })}
           {live.stopped_reason ? " · " + live.stopped_reason : ""}
         </p>
       ) : null}
@@ -200,19 +199,21 @@ export function LiveSessionPage({ sessionId, onBack, onOpenHistory }) {
 }
 
 function LiveStatus({ running, offline }) {
-  if (offline) return <span className="badge badge-danger">offline</span>;
+  const { t } = useUI();
+  if (offline) return <span className="badge badge-danger">{t("webui.Live.StatusOffline")}</span>;
   if (running) {
     return (
       <span className="badge badge-teal live-badge">
         <span className="live-dot" />
-        running
+        {t("webui.Live.StatusRunning")}
       </span>
     );
   }
-  return <span className="badge badge-outline">idle</span>;
+  return <span className="badge badge-outline">{t("webui.Live.StatusIdle")}</span>;
 }
 
 function LiveTurnCard({ live }) {
+  const { t } = useUI();
   const steps = live.steps || [];
   const started = live.started_at ? new Date(live.started_at * 1000).toLocaleTimeString() : "";
   return (
@@ -220,10 +221,10 @@ function LiveTurnCard({ live }) {
       <div className="row-between mb-xs">
         <span className="badge badge-teal live-badge">
           <span className="live-dot" />
-          running
+          {t("webui.Live.StatusRunning")}
         </span>
         <span className="text-xs muted">
-          started {started}
+          {t("webui.Live.StartedAt", { time: started })}
           {live.model ? " · " + live.model : ""}
         </span>
       </div>
@@ -233,7 +234,7 @@ function LiveTurnCard({ live }) {
           <pre className="code-block">{live.prompt}</pre>
         </div>
       ) : null}
-      {steps.length === 0 ? <p className="muted text-sm">Waiting for the model...</p> : null}
+      {steps.length === 0 ? <p className="muted text-sm">{t("webui.Live.Waiting")}</p> : null}
       {steps.map((step) => (
         <LiveStepBlock key={step.index} step={step} />
       ))}
@@ -242,18 +243,19 @@ function LiveTurnCard({ live }) {
 }
 
 function LiveStepBlock({ step }) {
+  const { t } = useUI();
   const tools = step.tools || [];
   const text = String(step.text || "");
   const reasoning = String(step.reasoning || "");
   return (
     <div className="live-step">
       <div className="live-step-head">
-        <span className="badge badge-outline">step {step.index}</span>
+        <span className="badge badge-outline">{t("webui.Live.Step", { index: step.index })}</span>
         {tools.some((tool) => tool.running) ? <span className="live-dot" /> : null}
       </div>
       {reasoning.trim() ? (
         <details className="reasoning-block" open>
-          <summary>Reasoning</summary>
+          <summary>{t("webui.Live.Reasoning")}</summary>
           <pre className="code-block">{reasoning}</pre>
         </details>
       ) : null}
@@ -266,6 +268,7 @@ function LiveStepBlock({ step }) {
 }
 
 function LiveToolRow({ tool }) {
+  const { t } = useUI();
   let args = "";
   try {
     args = JSON.stringify(tool.args || {});
@@ -280,12 +283,12 @@ function LiveToolRow({ tool }) {
           {tool.name} {args}
         </span>
         <span className={tool.running ? "badge badge-accent" : "badge badge-teal"}>
-          {tool.running ? "running" : "done"}
+          {tool.running ? t("webui.Live.StatusRunning") : t("webui.Live.Done")}
         </span>
       </div>
       {tool.output ? (
         <details>
-          <summary>Output</summary>
+          <summary>{t("webui.Live.Output")}</summary>
           <pre className="code-block">{tool.output}</pre>
         </details>
       ) : null}

@@ -98,11 +98,23 @@ func TestDefaultPluginsAndWebUI(t *testing.T) {
 	_ = json.NewDecoder(statusResp.Body).Decode(&statusData)
 	statusResp.Body.Close()
 
-	if len(statusData.Plugins) != 10 {
-		t.Fatalf("expected 10 default plugins loaded, got %d: %+v", len(statusData.Plugins), statusData.Plugins)
+	if len(statusData.Plugins) != 11 {
+		t.Fatalf("expected 11 default plugins loaded, got %d: %+v", len(statusData.Plugins), statusData.Plugins)
 	}
 	if len(statusData.Tools) != 7 {
 		t.Fatalf("expected 7 tools registered, got %d: %+v", len(statusData.Tools), statusData.Tools)
+	}
+
+	// The i18n plugin serves the English base catalog to the shell.
+	catalogResp := apiGet(t, baseURL+"/api/plugins/i18n/catalog", token)
+	var catalog struct {
+		Locale  string            `json:"locale"`
+		Strings map[string]string `json:"strings"`
+	}
+	_ = json.NewDecoder(catalogResp.Body).Decode(&catalog)
+	catalogResp.Body.Close()
+	if catalog.Locale != "en" || catalog.Strings["webui.Nav.Sessions"] != "Sessions" {
+		t.Fatalf("unexpected i18n catalog: %+v", catalog)
 	}
 
 	// 4. The step-limit settings round-trip through the core API.

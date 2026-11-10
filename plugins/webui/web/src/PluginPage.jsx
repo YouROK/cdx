@@ -53,7 +53,7 @@ class PluginErrorBoundary extends Component {
     if (this.state.error) {
       return (
         <div className="panel error-panel">
-          <h4 className="m-0 mb-xs">Plugin panel crashed</h4>
+          <h4 className="m-0 mb-xs">{this.props.t("webui.Plugin.Crashed")}</h4>
           <p className="muted m-0">{this.state.error}</p>
         </div>
       );
@@ -63,6 +63,7 @@ class PluginErrorBoundary extends Component {
 }
 
 export function PluginPage({ descriptor }) {
+  const { t } = useUI();
   if (descriptor.entry) {
     return <PagePanel descriptor={descriptor} />;
   }
@@ -72,10 +73,10 @@ export function PluginPage({ descriptor }) {
   return (
     <div>
       <div className="page-header">
-        <h3>{descriptor.title}</h3>
+        <h3>{t(descriptor.title)}</h3>
       </div>
       <div className="panel">
-        <p className="muted m-0">{descriptor.description || "This plugin has no settings yet."}</p>
+        <p className="muted m-0">{t(descriptor.description || "webui.Plugin.NoSettings")}</p>
       </div>
     </div>
   );
@@ -85,13 +86,15 @@ function PagePanel({ descriptor }) {
   const hostRef = useRef(null);
   const rootRef = useRef(null);
   const [error, setError] = useState("");
-  const { toast, confirm } = useUI();
+  const { toast, confirm, t, locale } = useUI();
 
   const api = useMemo(
     () => ({
       plugin: descriptor,
       toast,
       confirm,
+      t,
+      locale,
       fetchJSON: apiFetch,
       postJSON,
       addStyles(css) {
@@ -111,7 +114,7 @@ function PagePanel({ descriptor }) {
           shadow.appendChild(container);
           rootRef.current = createRoot(container);
         }
-        rootRef.current.render(<PluginErrorBoundary>{element}</PluginErrorBoundary>);
+        rootRef.current.render(<PluginErrorBoundary t={t}>{element}</PluginErrorBoundary>);
         return () => {
           if (rootRef.current) {
             rootRef.current.unmount();
@@ -120,7 +123,7 @@ function PagePanel({ descriptor }) {
         };
       }
     }),
-    [descriptor, toast, confirm]
+    [descriptor, toast, confirm, t, locale]
   );
 
   useEffect(() => {
@@ -128,7 +131,7 @@ function PagePanel({ descriptor }) {
     if (!host) return;
     setError("");
     if ((descriptor.ui_api || 0) > 1) {
-      setError("This panel requires a newer cdx web UI (ui_api " + descriptor.ui_api + ").");
+      setError(t("webui.Plugin.NeedsNewerUI", { version: descriptor.ui_api }));
       return;
     }
 
@@ -156,7 +159,7 @@ function PagePanel({ descriptor }) {
         const mod = await import(/* @vite-ignore */ descriptor.entry);
         const mount = typeof mod.mount === "function" ? mod.mount : mod.default;
         if (typeof mount !== "function") {
-          throw new Error("Panel module must export a mount(container, api) function");
+          throw new Error(t("webui.Plugin.ModuleAPI"));
         }
         const result = await mount(shadow, api);
         if (typeof result === "function") {
@@ -183,13 +186,13 @@ function PagePanel({ descriptor }) {
     <div>
       <div className="page-header">
         <div>
-          <h3>{descriptor.title}</h3>
-          {descriptor.description ? <p className="page-intro m-0">{descriptor.description}</p> : null}
+          <h3>{t(descriptor.title)}</h3>
+          {descriptor.description ? <p className="page-intro m-0">{t(descriptor.description)}</p> : null}
         </div>
       </div>
       {error ? (
         <div className="panel error-panel mb-md">
-          <h4 className="m-0 mb-xs">Panel failed to load</h4>
+          <h4 className="m-0 mb-xs">{t("webui.Plugin.PanelFailed")}</h4>
           <p className="muted m-0">{error}</p>
         </div>
       ) : null}

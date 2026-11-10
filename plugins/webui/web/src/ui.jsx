@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
 const UIContext = createContext(null);
+const identity = (key) => key;
 
-export function UIProvider({ children }) {
+export function UIProvider({ children, t = identity, locale = "en" }) {
   const [toasts, setToasts] = useState([]);
   const [confirmState, setConfirmState] = useState(null);
 
@@ -37,7 +38,7 @@ export function UIProvider({ children }) {
   }, [confirmState, settle]);
 
   return (
-    <UIContext.Provider value={{ toast, confirm }}>
+    <UIContext.Provider value={{ toast, confirm, t, locale }}>
       {children}
       <div className="toast-container">
         {toasts.map((item) => (
@@ -56,7 +57,7 @@ export function UIProvider({ children }) {
           <div className="modal-box confirm-box" role="dialog" aria-modal="true" aria-label={confirmState.title}>
             <div className="modal-header">
               <h4>{confirmState.title}</h4>
-              <button type="button" className="btn-icon" aria-label="Close" onClick={() => settle(false)}>
+              <button type="button" className="btn-icon" aria-label={t("webui.Action.Close")} onClick={() => settle(false)}>
                 &times;
               </button>
             </div>
@@ -64,10 +65,10 @@ export function UIProvider({ children }) {
               <div className="text-sm">{confirmState.message}</div>
               <div className="modal-actions">
                 <button type="button" className="btn btn-default" onClick={() => settle(false)}>
-                  Cancel
+                  {t("webui.Action.Cancel")}
                 </button>
                 <button type="button" className="btn btn-danger" onClick={() => settle(true)}>
-                  Confirm
+                  {t("webui.Action.Confirm")}
                 </button>
               </div>
             </div>

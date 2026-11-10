@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const DEFAULT_CONTEXT = 128000;
 const DEFAULT_MAX_TOKENS = 4096;
 
-function fmtNum(value) {
-  if (!value) return "not set";
+function fmtNum(value, t) {
+  if (!value) return t("providers.NotSet");
   return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 }
 
@@ -60,7 +60,7 @@ function NumberInput({ value, onChange, placeholder }) {
   );
 }
 
-function Modal({ title, wide, onClose, children }) {
+function Modal({ title, wide, onClose, children, t }) {
   useEffect(() => {
     function onKey(event) {
       if (event.key === "Escape") onClose();
@@ -79,7 +79,7 @@ function Modal({ title, wide, onClose, children }) {
       <div className={"modal-box" + (wide ? " modal-wide" : "")} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-header">
           <h4>{title}</h4>
-          <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}>
+          <button type="button" className="btn-icon" aria-label={t("webui.Action.Close")} onClick={onClose}>
             &times;
           </button>
         </div>
@@ -94,6 +94,7 @@ export function mount(container, api) {
 }
 
 function ProvidersPanel({ api }) {
+  const t = api.t;
   const [state, setState] = useState({ providers: [], models: [] });
   const [modal, setModal] = useState(null);
 
@@ -115,20 +116,17 @@ function ProvidersPanel({ api }) {
   return (
     <div>
       <div className="row-between mb-md">
-        <p className="page-intro m-0">
-          A provider holds the connection: address, protocol and key. Models belong to a provider and differ only in
-          their own settings.
-        </p>
+        <p className="page-intro m-0">{t("providers.Intro")}</p>
         <button type="button" className="btn btn-primary" onClick={() => setModal({ type: "provider" })}>
-          Add provider
+          {t("providers.AddProvider")}
         </button>
       </div>
 
       {providers.length === 0 ? (
         <div className="panel empty-panel">
-          <p className="muted">No providers configured yet.</p>
+          <p className="muted">{t("providers.Empty")}</p>
           <button type="button" className="btn btn-primary" onClick={() => setModal({ type: "provider" })}>
-            Add provider
+            {t("providers.AddProvider")}
           </button>
         </div>
       ) : (
@@ -197,23 +195,24 @@ function ProvidersPanel({ api }) {
 }
 
 function ProviderCard({ provider, models, api, reload, setModal }) {
+  const t = api.t;
   async function test() {
     try {
       const data = await api.postJSON("/api/plugins/providers/providers/test", { name: provider.name });
-      api.toast(data.message || "Test finished", Boolean(data.ok));
+      api.toast(data.message || t("providers.TestFinished"), Boolean(data.ok));
     } catch (err) {
       api.toast(String(err.message || err), false);
     }
   }
 
   async function remove() {
-    const ok = await api.confirm("Delete provider", "Delete provider '" + provider.name + "' and its models?");
+    const ok = await api.confirm(t("providers.DeleteTitle"), t("providers.DeleteConfirm", { name: provider.name }));
     if (!ok) return;
     try {
       await api.fetchJSON("/api/plugins/providers/providers?name=" + encodeURIComponent(provider.name), {
         method: "DELETE"
       });
-      api.toast("Provider deleted");
+      api.toast(t("providers.Deleted"));
       reload();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -227,7 +226,7 @@ function ProviderCard({ provider, models, api, reload, setModal }) {
           <div className="row-gap-xs">
             <h4 className="m-0">{provider.name}</h4>
             <span className={provider.has_api_key ? "badge badge-teal" : "badge badge-warn"}>
-              {provider.has_api_key ? "key set" : "no key"}
+              {provider.has_api_key ? t("providers.KeySet") : t("providers.NoKey")}
             </span>
             <span className="badge badge-outline">{provider.protocol || "openai-chat"}</span>
           </div>
@@ -235,46 +234,46 @@ function ProviderCard({ provider, models, api, reload, setModal }) {
         </div>
         <div className="row-gap-xs">
           <button type="button" className="btn btn-light btn-xs" onClick={test}>
-            Test
+            {t("providers.Test")}
           </button>
           <button
             type="button"
             className="btn btn-light btn-xs"
             onClick={() => setModal({ type: "discover", provider: provider.name })}
           >
-            Get models
+            {t("providers.GetModels")}
           </button>
           <button
             type="button"
             className="btn btn-default btn-xs"
             onClick={() => setModal({ type: "key", provider: provider.name })}
           >
-            Key
+            {t("providers.Key")}
           </button>
           <button
             type="button"
             className="btn btn-default btn-xs"
             onClick={() => setModal({ type: "provider", provider })}
           >
-            Edit
+            {t("providers.Edit")}
           </button>
           <button type="button" className="btn btn-danger btn-xs" onClick={remove}>
-            Delete
+            {t("providers.Delete")}
           </button>
         </div>
       </div>
       <div className="row-between mb-xs">
-        <span className="section-caption">MODELS: {models.length}</span>
+        <span className="section-caption">{t("providers.ModelsCount", { count: models.length })}</span>
         <button
           type="button"
           className="btn btn-subtle btn-xs"
           onClick={() => setModal({ type: "model", provider: provider.name })}
         >
-          + Add model
+          {t("providers.AddModel")}
         </button>
       </div>
       {models.length === 0 ? (
-        <div className="muted text-sm">This provider has no models yet.</div>
+        <div className="muted text-sm">{t("providers.NoModels")}</div>
       ) : (
         <div className="stack-xs">
           {models.map((model) => (
@@ -293,13 +292,14 @@ function ProviderCard({ provider, models, api, reload, setModal }) {
 }
 
 function ModelRow({ model, api, reload, setModal }) {
+  const t = api.t;
   async function makeDefault() {
     try {
       await api.postJSON("/api/plugins/providers/models/default", {
         provider: model.provider,
         name: model.name
       });
-      api.toast("Default model updated");
+      api.toast(t("providers.DefaultUpdated"));
       reload();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -307,7 +307,7 @@ function ModelRow({ model, api, reload, setModal }) {
   }
 
   async function remove() {
-    const ok = await api.confirm("Delete model", "Delete model '" + model.provider + "/" + model.name + "'?");
+    const ok = await api.confirm(t("providers.DeleteModelTitle"), t("providers.DeleteModelConfirm", { model: model.provider + "/" + model.name }));
     if (!ok) return;
     try {
       await api.fetchJSON(
@@ -317,7 +317,7 @@ function ModelRow({ model, api, reload, setModal }) {
           encodeURIComponent(model.name),
         { method: "DELETE" }
       );
-      api.toast("Model deleted");
+      api.toast(t("providers.ModelDeleted"));
       reload();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -330,28 +330,28 @@ function ModelRow({ model, api, reload, setModal }) {
         <div>
           <div className="row-gap-xs">
             <span className="fw-600">{model.name}</span>
-            {model.default ? <span className="badge badge-accent">default</span> : null}
+            {model.default ? <span className="badge badge-accent">{t("providers.Default")}</span> : null}
           </div>
           <div className="mono text-xs muted">{model.remote || model.name}</div>
           <div className="row-gap-md text-xs muted mt-2">
-            <span>Context: {fmtNum(model.context_window)}</span>
-            <span>Max output: {fmtNum(model.max_tokens)}</span>
-            <span>Temperature: {model.temperature !== undefined ? model.temperature : 0.7}</span>
+            <span>{t("providers.Context")}: {fmtNum(model.context_window, t)}</span>
+            <span>{t("providers.MaxOutput")}: {fmtNum(model.max_tokens, t)}</span>
+            <span>{t("providers.Temperature")}: {model.temperature !== undefined ? model.temperature : 0.7}</span>
           </div>
         </div>
         <div className="row-gap-xs">
           <button type="button" className="btn btn-light btn-xs" disabled={model.default} onClick={makeDefault}>
-            Default
+            {t("providers.MakeDefault")}
           </button>
           <button
             type="button"
             className="btn btn-default btn-xs"
             onClick={() => setModal({ type: "model", provider: model.provider, model })}
           >
-            Edit
+            {t("providers.Edit")}
           </button>
           <button type="button" className="btn btn-danger btn-xs" onClick={remove}>
-            Delete
+            {t("providers.Delete")}
           </button>
         </div>
       </div>
@@ -360,6 +360,7 @@ function ModelRow({ model, api, reload, setModal }) {
 }
 
 function ProviderModal({ api, provider, onClose, onSaved }) {
+  const t = api.t;
   const existing = Boolean(provider);
   const [form, setForm] = useState(
     provider || { name: "", protocol: "openai-chat", base_url: "", api_key: "" }
@@ -374,7 +375,7 @@ function ProviderModal({ api, provider, onClose, onSaved }) {
         base_url: form.base_url,
         api_key: form.api_key || ""
       });
-      api.toast("Provider saved");
+      api.toast(t("providers.ProviderSaved"));
       onSaved();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -382,11 +383,11 @@ function ProviderModal({ api, provider, onClose, onSaved }) {
   }
 
   return (
-    <Modal title={existing ? "Edit provider: " + provider.name : "New provider"} onClose={onClose}>
+    <Modal title={existing ? t("providers.EditProvider", { name: provider.name }) : t("providers.NewProvider")} onClose={onClose} t={t}>
       <form className="form-stack" onSubmit={submit}>
         <label>
-          Name
-          <span className="field-hint">Unique provider connection name</span>
+          {t("providers.Name")}
+          <span className="field-hint">{t("providers.NameHint")}</span>
           <input
             value={form.name}
             readOnly={existing}
@@ -395,15 +396,15 @@ function ProviderModal({ api, provider, onClose, onSaved }) {
           />
         </label>
         <label>
-          Protocol
+          {t("providers.Protocol")}
           <select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value })}>
             <option value="openai-chat">openai-chat</option>
             <option value="anthropic">anthropic</option>
           </select>
         </label>
         <label>
-          Base URL
-          <span className="field-hint">API endpoint address, e.g. https://api.openai.com/v1</span>
+          {t("providers.BaseURL")}
+          <span className="field-hint">{t("providers.BaseURLHint")}</span>
           <input
             placeholder="https://api.openai.com/v1"
             value={form.base_url || ""}
@@ -411,9 +412,9 @@ function ProviderModal({ api, provider, onClose, onSaved }) {
           />
         </label>
         <label>
-          API Key
+          {t("providers.ApiKey")}
           <span className="field-hint">
-            {existing ? "Leave blank to keep existing encrypted key" : "Stored encrypted in BoltDB secrets"}
+            {existing ? t("providers.KeepKey") : t("providers.KeyHint")}
           </span>
           <input
             type="password"
@@ -424,10 +425,10 @@ function ProviderModal({ api, provider, onClose, onSaved }) {
         </label>
         <div className="modal-actions">
           <button type="button" className="btn btn-default" onClick={onClose}>
-            Cancel
+            {t("webui.Action.Cancel")}
           </button>
           <button type="submit" className="btn btn-primary">
-            Save
+            {t("providers.Save")}
           </button>
         </div>
       </form>
@@ -436,13 +437,14 @@ function ProviderModal({ api, provider, onClose, onSaved }) {
 }
 
 function KeyModal({ api, provider, onClose, onSaved }) {
+  const t = api.t;
   const [key, setKey] = useState("");
 
   async function submit(event) {
     event.preventDefault();
     try {
       await api.postJSON("/api/plugins/providers/providers/key", { name: provider, api_key: key });
-      api.toast("API key saved");
+      api.toast(t("providers.KeySaved"));
       onSaved();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -450,19 +452,19 @@ function KeyModal({ api, provider, onClose, onSaved }) {
   }
 
   return (
-    <Modal title={"Key: " + provider} onClose={onClose}>
+    <Modal title={t("providers.KeyTitle", { name: provider })} onClose={onClose} t={t}>
       <form className="form-stack" onSubmit={submit}>
         <label>
-          API Key
-          <span className="field-hint">Encrypted with AES-256-GCM inside cdx.db</span>
-          <input type="password" placeholder="Enter new key..." value={key} onChange={(event) => setKey(event.target.value)} />
+          {t("providers.ApiKey")}
+          <span className="field-hint">{t("providers.KeyModalHint")}</span>
+          <input type="password" placeholder={t("providers.EnterKey")} value={key} onChange={(event) => setKey(event.target.value)} />
         </label>
         <div className="modal-actions">
           <button type="button" className="btn btn-default" onClick={onClose}>
-            Cancel
+            {t("webui.Action.Cancel")}
           </button>
           <button type="submit" className="btn btn-primary">
-            Save
+            {t("providers.Save")}
           </button>
         </div>
       </form>
@@ -471,6 +473,7 @@ function KeyModal({ api, provider, onClose, onSaved }) {
 }
 
 function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
+  const t = api.t;
   const existing = Boolean(model);
   const [form, setForm] = useState(() => ({
     provider,
@@ -515,7 +518,7 @@ function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
         skip_temperature: form.skip_temperature,
         default: form.default
       });
-      api.toast("Model saved");
+      api.toast(t("providers.ModelSaved"));
       onSaved();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -524,20 +527,21 @@ function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
 
   return (
     <Modal
-      title={existing ? "Edit model: " + model.name : "New model: " + provider}
+      title={existing ? t("providers.EditModel", { name: model.name }) : t("providers.NewModel", { provider: provider })}
       wide
       onClose={onClose}
+      t={t}
     >
       <form className="form-stack" onSubmit={submit}>
         <div className="grid-2">
           <label>
-            Name
-            <span className="field-hint">Unique across all providers, used by --model and in history.</span>
+            {t("providers.Name")}
+            <span className="field-hint">{t("providers.ModelNameHint")}</span>
             <input value={form.name} required onChange={(event) => update("name", event.target.value)} />
           </label>
           <label>
-            Remote model id
-            <span className="field-hint">The identifier the provider expects.</span>
+            {t("providers.Remote")}
+            <span className="field-hint">{t("providers.RemoteHint")}</span>
             <input
               placeholder="deepseek-ai/DeepSeek-V4-Flash"
               value={form.remote}
@@ -547,8 +551,8 @@ function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
         </div>
         <div className="grid-3">
           <label>
-            Context
-            <span className="field-hint">Uses the provider value when available, otherwise 128000.</span>
+            {t("providers.Context")}
+            <span className="field-hint">{t("providers.ContextHint")}</span>
             <NumberInput
               value={form.context_window}
               placeholder="128000"
@@ -556,8 +560,8 @@ function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
             />
           </label>
           <label>
-            Max output
-            <span className="field-hint">Uses the provider value when available, otherwise 4096.</span>
+            {t("providers.MaxOutput")}
+            <span className="field-hint">{t("providers.MaxOutputHint")}</span>
             <NumberInput
               value={form.max_tokens}
               placeholder="4096"
@@ -566,7 +570,7 @@ function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
           </label>
           <label>
             <div>
-              Temperature <span className="muted">{Number(form.temperature).toFixed(2)}</span>
+              {t("providers.Temperature")} <span className="muted">{Number(form.temperature).toFixed(2)}</span>
             </div>
             <div className="slider-wrap">
               <input
@@ -583,12 +587,12 @@ function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
                 <span>2</span>
               </div>
             </div>
-            <span className="field-hint">Lower is more predictable, higher is more creative.</span>
+            <span className="field-hint">{t("providers.TemperatureHint")}</span>
           </label>
         </div>
         <label>
-          Reasoning levels
-          <span className="field-hint">Comma separated, in order from weak to strong.</span>
+          {t("providers.ReasoningLevels")}
+          <span className="field-hint">{t("providers.ReasoningLevelsHint")}</span>
           <input
             placeholder="low,medium,high,max"
             value={form.reasoning_levels}
@@ -596,12 +600,12 @@ function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
           />
         </label>
         <label>
-          Default reasoning level
+          {t("providers.DefaultReasoning")}
           <select
             value={form.reasoning_default}
             onChange={(event) => update("reasoning_default", event.target.value)}
           >
-            <option value="">(none)</option>
+            <option value="">{t("providers.None")}</option>
             {levels.map((level) => (
               <option key={level} value={level}>
                 {level}
@@ -611,48 +615,48 @@ function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
         </label>
         <div className="switch-grid">
           <label>
-            Use by default
+            {t("providers.UseDefault")}
             <span className="check-field">
               <input
                 type="checkbox"
                 checked={form.default}
                 onChange={(event) => update("default", event.target.checked)}
               />
-              <span>Enabled</span>
+              <span>{t("webui.Schema.Enabled")}</span>
             </span>
-            <span className="field-hint">One model is the default for the whole program.</span>
+            <span className="field-hint">{t("providers.UseDefaultHint")}</span>
           </label>
           <label>
-            Send reasoning_effort
+            {t("providers.SendReasoning")}
             <span className="check-field">
               <input
                 type="checkbox"
                 checked={form.supports_reasoning_effort}
                 onChange={(event) => update("supports_reasoning_effort", event.target.checked)}
               />
-              <span>Enabled</span>
+              <span>{t("webui.Schema.Enabled")}</span>
             </span>
-            <span className="field-hint">Only when the provider accepts the parameter.</span>
+            <span className="field-hint">{t("providers.SendReasoningHint")}</span>
           </label>
           <label>
-            Don't send temperature
+            {t("providers.SkipTemperature")}
             <span className="check-field">
               <input
                 type="checkbox"
                 checked={form.skip_temperature}
                 onChange={(event) => update("skip_temperature", event.target.checked)}
               />
-              <span>Enabled</span>
+              <span>{t("webui.Schema.Enabled")}</span>
             </span>
-            <span className="field-hint">Needed when the provider rejects the parameter.</span>
+            <span className="field-hint">{t("providers.SkipTemperatureHint")}</span>
           </label>
         </div>
         <div className="modal-actions">
           <button type="button" className="btn btn-default" onClick={onClose}>
-            Cancel
+            {t("webui.Action.Cancel")}
           </button>
           <button type="submit" className="btn btn-primary">
-            Save
+            {t("providers.Save")}
           </button>
         </div>
       </form>
@@ -661,6 +665,7 @@ function ModelModal({ api, provider, model, isFirst, onClose, onSaved }) {
 }
 
 function DiscoverModal({ api, provider, onClose, onSaved }) {
+  const t = api.t;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [models, setModels] = useState([]);
@@ -723,7 +728,7 @@ function DiscoverModal({ api, provider, onClose, onSaved }) {
           temperature: 0.7
         });
       }
-      api.toast("Models added: " + selected.size);
+      api.toast(t("providers.Added", { count: selected.size }));
       onSaved();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -733,13 +738,13 @@ function DiscoverModal({ api, provider, onClose, onSaved }) {
   }
 
   return (
-    <Modal title={"Get models: " + provider} onClose={onClose}>
+    <Modal title={t("providers.GetModelsTitle", { name: provider })} onClose={onClose} t={t}>
       {loading ? (
-        <p className="muted">Fetching models...</p>
+        <p className="muted">{t("providers.Fetching")}</p>
       ) : error ? (
         <div className="error-text">{error}</div>
       ) : models.length === 0 ? (
-        <p className="muted">The provider returned no models.</p>
+        <p className="muted">{t("providers.NoRemoteModels")}</p>
       ) : (
         <>
           <div className="discover-controls">
@@ -748,13 +753,13 @@ function DiscoverModal({ api, provider, onClose, onSaved }) {
               className="btn btn-light btn-xs"
               onClick={() => setSelected(new Set(models.map((item) => item.id)))}
             >
-              Select all
+              {t("providers.SelectAll")}
             </button>
             <button type="button" className="btn btn-light btn-xs" onClick={() => setSelected(new Set())}>
-              Clear all
+              {t("providers.ClearAll")}
             </button>
             <span className="text-xs muted">
-              {selected.size} of {models.length} selected
+              {t("providers.Selected", { selected: selected.size, total: models.length })}
             </span>
           </div>
           <div className="discover-list">
@@ -769,7 +774,7 @@ function DiscoverModal({ api, provider, onClose, onSaved }) {
       )}
       <div className="modal-actions mt-md">
         <button type="button" className="btn btn-default" onClick={onClose}>
-          Cancel
+          {t("webui.Action.Cancel")}
         </button>
         <button
           type="button"
@@ -777,7 +782,7 @@ function DiscoverModal({ api, provider, onClose, onSaved }) {
           disabled={loading || saving || selected.size === 0}
           onClick={addSelected}
         >
-          {saving ? "Adding..." : "Add selected"}
+          {saving ? t("providers.Adding") : t("providers.AddSelected")}
         </button>
       </div>
     </Modal>

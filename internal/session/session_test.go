@@ -1117,3 +1117,109 @@ func TestBackfillSessionTitles(t *testing.T) {
 		t.Fatalf("backfilled title = %q", updated.Title)
 	}
 }
+
+func TestTurnStopsOnRepeatedToolCalls(t *testing.T) {
+	orch, _, reg, _ := setupTestOrchestrator(t)
+
+	calls := 0
+	reg.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(_ context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "m1", Name: "m1", Default: true}}, nil
+		},
+		Complete: func(_ context.Context, _ plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			calls++
+			return &plugin.CompleteResponse{
+				ToolCalls: []map[string]any{
+					{"id": "call_1", "name": "noop", "arguments": map[string]any{"layer": calls}},
+				},
+			}, nil
+		},
+	})
+
+	asker := &stepAnswers{answers: []question.Answer{{Choice: "stop"}}}
+	ctx := question.WithAsker(context.Background(), asker)
+
+	res, err := orch.RunTurn(ctx, TurnRequest{Workdir: "/work", Mode: ModeAuto, Prompt: "loop"}, nil)
+	if err != nil {
+		t.Fatalf("RunTurn failed: %v", err)
+	}
+	if len(asker.questions) != 1 {
+		kinds := make([]string, 0, len(asker.questions))
+		for _, q := range asker.questions {
+			kinds = append(kinds, q.Kind+"|"+q.Title)
+		}
+		t.Fatalf("questions = %d, want 1: %v", len(asker.questions), kinds)
+	}
+	ask := asker.questions[0]
+	if ask.Kind != question.KindLoop || ask.Source != question.SourceCore || ask.Default != "stop" {
+		t.Fatalf("unexpected loop question: %+v", ask)
+	}
+	if !strings.Contains(ask.Body, "noop") || !strings.Contains(ask.Body, "10") {
+		t.Fatalf("question does not name the call: %q", ask.Body)
+	}
+	if res.Steps != 10 || res.StoppedReason != "loop_detected" {
+		t.Fatalf("steps=%d reason=%q, want 10 and loop_detected", res.Steps, res.StoppedReason)
+	}
+	messages, err := orch.GetMessages(res.Session.ID)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	last := messages[len(messages)-1]
+	if last.Role != "tool" || !strings.Contains(last.Content, "stopped by the user") {
+		t.Fatalf("the stopped call has no tool result: %+v", last)
+	}
+}
+
+func TestTurnContinuesAfterLoopQuestion(t *testing.T) {
+	orch, _, reg, _ := setupTestOrchestrator(t)
+
+	calls := 0
+	reg.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(_ context.Context) ([]plugin.ModelInfo, error) {
+			return []plugin.ModelInfo{{ID: "m1", Name: "m1", Default: true}}, nil
+		},
+		Complete: func(_ context.Context, _ plugin.CompleteRequest, _ func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			calls++
+			if calls > 10 {
+				return &plugin.CompleteResponse{Content: "done"}, nil
+			}
+			return &plugin.CompleteResponse{
+				ToolCalls: []map[string]any{
+					{"id": "call_1", "name": "noop", "arguments": map[string]any{"layer": calls}},
+				},
+			}, nil
+		},
+	})
+
+	asker := &stepAnswers{answers: []question.Answer{{Choice: "continue"}}}
+	ctx := question.WithAsker(context.Background(), asker)
+
+	res, err := orch.RunTurn(ctx, TurnRequest{Workdir: "/work", Mode: ModeAuto, Prompt: "loop"}, nil)
+	if err != nil {
+		t.Fatalf("RunTurn failed: %v", err)
+	}
+	if len(asker.questions) != 1 {
+		t.Fatalf("questions = %d, want 1", len(asker.questions))
+	}
+	if res.Steps != 11 || res.StoppedReason != "" || res.Content != "done" {
+		t.Fatalf("steps=%d reason=%q content=%q, want 11, empty, done", res.Steps, res.StoppedReason, res.Content)
+	}
+}
+
+func TestLoopSignatureIgnoresNumbers(t *testing.T) {
+	first := loopSignature("mcp_call", map[string]any{"layer": float64(1), "name": "x"})
+	second := loopSignature("mcp_call", map[string]any{"layer": float64(2), "name": "x"})
+	if first != second {
+		t.Fatalf("numeric ids must not change the signature: %q vs %q", first, second)
+	}
+	other := loopSignature("mcp_call", map[string]any{"layer": float64(1), "name": "y"})
+	if first == other {
+		t.Fatalf("different arguments produced the same signature: %q", first)
+	}
+	another := loopSignature("shell", map[string]any{"layer": float64(1), "name": "x"})
+	if first == another {
+		t.Fatalf("different tools produced the same signature: %q", first)
+	}
+}

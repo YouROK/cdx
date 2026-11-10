@@ -158,7 +158,7 @@ func TestInstallFromZipURLValidateEnableDisableAndRemove(t *testing.T) {
 	}
 
 	// Remove the installed plugin.
-	if err := mgr.RemovePlugin("hello-zip"); err != nil {
+	if err := mgr.RemovePlugin(context.Background(), "hello-zip"); err != nil {
 		t.Fatalf("RemovePlugin failed: %v", err)
 	}
 	if _, ok := mgr.GetPluginInfo("hello-zip"); ok {

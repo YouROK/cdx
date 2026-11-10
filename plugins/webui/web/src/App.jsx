@@ -1,8 +1,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, apiFetch } from "./api.js";
 import { activeSection, navigate, parseRoute } from "./route.js";
+import { translate } from "./i18n.js";
 import { Icon } from "./icons.jsx";
 import { PluginPage } from "./PluginPage.jsx";
+import { UIProvider } from "./ui.jsx";
 import { GeneralPage } from "./pages/GeneralPage.jsx";
 import { LiveSessionPage } from "./pages/LiveSessionPage.jsx";
 import { SessionsPage } from "./pages/SessionsPage.jsx";
@@ -11,22 +13,33 @@ import { LogsPage } from "./pages/LogsPage.jsx";
 
 // Built-in service pages start at this order value; plugin panels with a
 // lower order belong to the first group of the menu.
-const SERVICE_ORDER = 1000;
+const SERVICE_ORDER = 950;
 
 export function App() {
   const [status, setStatus] = useState(null);
+  const [i18n, setI18n] = useState({ locale: "en", strings: {} });
   const [error, setError] = useState(null);
   const [route, setRoute] = useState(() => parseRoute(window.location.hash));
 
   const refreshStatus = useCallback(async () => {
     try {
-      const data = await apiFetch("/api/core/status");
+      const [data, catalog] = await Promise.all([
+        apiFetch("/api/core/status"),
+        apiFetch("/api/plugins/i18n/catalog").catch(() => null)
+      ]);
       setStatus(data);
+      if (catalog && catalog.strings) {
+        setI18n({ locale: catalog.locale || "en", strings: catalog.strings });
+      } else {
+        setI18n({ locale: "en", strings: {} });
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)));
     }
   }, []);
+
+  const t = useCallback((key, vars) => translate(i18n.strings, key, vars), [i18n]);
 
   useEffect(() => {
     refreshStatus();
@@ -45,15 +58,15 @@ export function App() {
 
   const navItems = useMemo(() => {
     const items = [
-      { id: "general", label: "General", icon: "general", order: 0, path: "/" },
-      { id: "sessions", label: "Sessions", icon: "sessions", order: 1000, path: "/sessions" },
-      { id: "plugins", label: "Plugins", icon: "plugins", order: 1010, path: "/plugins" },
-      { id: "logs", label: "Logs", icon: "logs", order: 1020, path: "/logs" }
+      { id: "general", label: t("webui.Nav.General"), icon: "general", order: 0, path: "/" },
+      { id: "sessions", label: t("webui.Nav.Sessions"), icon: "sessions", order: 950, path: "/sessions" },
+      { id: "plugins", label: t("webui.Nav.Plugins"), icon: "plugins", order: 960, path: "/plugins" },
+      { id: "logs", label: t("webui.Nav.Logs"), icon: "logs", order: 970, path: "/logs" }
     ];
     for (const ui of status?.ui || []) {
       items.push({
         id: "plugin:" + ui.plugin_id,
-        label: ui.title || ui.plugin_id,
+        label: t(ui.title || ui.plugin_id),
         icon: ui.icon || "plugins",
         order: ui.order == null ? 500 : Number(ui.order),
         path: "/plugin/" + ui.plugin_id,
@@ -64,7 +77,7 @@ export function App() {
       if (a.order !== b.order) return a.order - b.order;
       return a.label.localeCompare(b.label);
     });
-  }, [status]);
+  }, [status, t]);
 
   const pluginIDs = useMemo(() => (status?.ui || []).map((ui) => ui.plugin_id), [status]);
   const section = activeSection(route, pluginIDs);
@@ -87,7 +100,8 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <UIProvider t={t} locale={i18n.locale}>
+      <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
           <svg width="22" height="22" viewBox="0 0 64 64" role="img" aria-label="cdx" style={{ flex: "none" }}>
@@ -155,7 +169,8 @@ export function App() {
           {current?.ui ? <PluginPage key={current.id} descriptor={current.ui} /> : null}
         </div>
       </main>
-    </div>
+      </div>
+    </UIProvider>
   );
 }
 

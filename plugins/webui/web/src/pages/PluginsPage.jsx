@@ -3,7 +3,7 @@ import { apiFetch, postJSON } from "../api.js";
 import { useUI } from "../ui.jsx";
 
 export function PluginsPage({ onChanged }) {
-  const { toast, confirm } = useUI();
+  const { toast, confirm, t } = useUI();
   const [plugins, setPlugins] = useState([]);
   const [url, setUrl] = useState("");
   const [installing, setInstalling] = useState(false);
@@ -29,7 +29,7 @@ export function PluginsPage({ onChanged }) {
     setInstalling(true);
     try {
       const data = await postJSON("/api/core/plugins/install", { url: value });
-      toast("Installed " + data.plugin.name + " v" + data.plugin.version);
+      toast(t("webui.Plugins.Installed", { name: data.plugin.name, version: data.plugin.version }));
       setUrl("");
       await loadPlugins();
       onChanged?.();
@@ -46,7 +46,7 @@ export function PluginsPage({ onChanged }) {
         "/api/core/plugins/" + encodeURIComponent(plugin.id) + "/enable",
         { enabled: !plugin.enabled }
       );
-      toast(plugin.id + (plugin.enabled ? " disabled" : " enabled"));
+      toast(t(plugin.enabled ? "webui.Plugins.Disabled" : "webui.Plugins.Enabled", { id: plugin.id }));
       await loadPlugins();
       onChanged?.();
     } catch (err) {
@@ -55,11 +55,11 @@ export function PluginsPage({ onChanged }) {
   }
 
   async function remove(plugin) {
-    const ok = await confirm("Remove plugin", "Remove installed plugin '" + plugin.id + "' from disk?");
+    const ok = await confirm(t("webui.Plugins.RemoveTitle"), t("webui.Plugins.RemoveConfirm", { id: plugin.id }));
     if (!ok) return;
     try {
       await apiFetch("/api/core/plugins/" + encodeURIComponent(plugin.id), { method: "DELETE" });
-      toast("Plugin " + plugin.id + " removed");
+      toast(t("webui.Plugins.Removed", { id: plugin.id }));
       await loadPlugins();
       onChanged?.();
     } catch (err) {
@@ -70,15 +70,12 @@ export function PluginsPage({ onChanged }) {
   return (
     <div>
       <div className="page-header">
-        <h3>Plugins</h3>
+        <h3>{t("webui.Nav.Plugins")}</h3>
       </div>
 
       <div className="panel mb-md">
-        <h4 className="m-0 mb-xs">Install plugin</h4>
-        <p className="field-hint mb-md">
-          Provide a direct link to a plugin .zip archive. Before installation, cdx verifies the archive layout,
-          manifest.json schema, version compatibility, and JS syntax.
-        </p>
+        <h4 className="m-0 mb-xs">{t("webui.Plugins.InstallTitle")}</h4>
+        <p className="field-hint mb-md">{t("webui.Plugins.InstallHint")}</p>
         <form className="row-gap-xs" style={{ alignItems: "stretch" }} onSubmit={install}>
           <input
             type="text"
@@ -89,7 +86,7 @@ export function PluginsPage({ onChanged }) {
             onChange={(event) => setUrl(event.target.value)}
           />
           <button type="submit" className="btn btn-primary" disabled={installing}>
-            {installing ? "Verifying & Installing..." : "Install from ZIP"}
+            {installing ? t("webui.Plugins.Installing") : t("webui.Plugins.InstallButton")}
           </button>
         </form>
       </div>
@@ -98,12 +95,12 @@ export function PluginsPage({ onChanged }) {
         <table className="table">
           <thead>
             <tr>
-              <th>Plugin</th>
-              <th>Version</th>
-              <th>Scope</th>
-              <th>Status</th>
-              <th>Tools</th>
-              <th style={{ textAlign: "right" }}>Actions</th>
+              <th>{t("webui.Plugins.TablePlugin")}</th>
+              <th>{t("webui.Plugins.TableVersion")}</th>
+              <th>{t("webui.Plugins.TableScope")}</th>
+              <th>{t("webui.Plugins.TableStatus")}</th>
+              <th>{t("webui.Plugins.TableTools")}</th>
+              <th style={{ textAlign: "right" }}>{t("webui.Plugins.TableActions")}</th>
             </tr>
           </thead>
           <tbody>
@@ -121,7 +118,7 @@ export function PluginsPage({ onChanged }) {
                 </td>
                 <td style={{ whiteSpace: "nowrap" }}>
                   <span className={plugin.scope === "user" ? "badge badge-accent" : "badge badge-outline"}>
-                    {plugin.scope}
+                    {plugin.scope === "user" ? t("webui.Plugins.ScopeUser") : t("webui.Plugins.ScopeSystem")}
                   </span>
                 </td>
                 <td style={{ whiteSpace: "nowrap" }}>
@@ -134,7 +131,11 @@ export function PluginsPage({ onChanged }) {
                           : "badge badge-warn"
                     }
                   >
-                    {plugin.status === "error" ? "error" : plugin.enabled ? "enabled" : "disabled"}
+                    {plugin.status === "error"
+                      ? t("webui.Plugins.StatusError")
+                      : plugin.enabled
+                        ? t("webui.Plugins.StatusEnabled")
+                        : t("webui.Plugins.StatusDisabled")}
                   </span>
                 </td>
                 <td style={{ whiteSpace: "nowrap" }}>
@@ -146,16 +147,16 @@ export function PluginsPage({ onChanged }) {
                 </td>
                 <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                   <button type="button" className="btn btn-default btn-xs" onClick={() => setDetails(plugin)}>
-                    Details
+                    {t("webui.Plugins.Details")}
                   </button>{" "}
                   <button type="button" className="btn btn-light btn-xs" onClick={() => toggle(plugin)}>
-                    {plugin.enabled ? "Disable" : "Enable"}
+                    {plugin.enabled ? t("webui.Plugins.Disable") : t("webui.Plugins.Enable")}
                   </button>
                   {plugin.removable ? (
                     <>
                       {" "}
                       <button type="button" className="btn btn-danger btn-xs" onClick={() => remove(plugin)}>
-                        Remove
+                        {t("webui.Plugins.Remove")}
                       </button>
                     </>
                   ) : null}
@@ -164,7 +165,7 @@ export function PluginsPage({ onChanged }) {
             ))}
           </tbody>
         </table>
-        {plugins.length === 0 ? <p className="muted panel-pad">No plugins found.</p> : null}
+        {plugins.length === 0 ? <p className="muted panel-pad">{t("webui.Plugins.Empty")}</p> : null}
       </div>
 
       {details ? <PluginDetails plugin={details} onClose={() => setDetails(null)} /> : null}
@@ -173,6 +174,7 @@ export function PluginsPage({ onChanged }) {
 }
 
 function PluginDetails({ plugin, onClose }) {
+  const { t } = useUI();
   const tools = plugin.tools || [];
   return (
     <div
@@ -194,29 +196,29 @@ function PluginDetails({ plugin, onClose }) {
           <div className="text-sm">{plugin.description || ""}</div>
           <div className="grid-2 text-xs">
             <div>
-              <span className="muted">ID:</span> <span className="mono">{plugin.id}</span>
+              <span className="muted">{t("webui.Plugins.Id")}:</span> <span className="mono">{plugin.id}</span>
             </div>
             <div>
-              <span className="muted">Scope:</span> <span className="mono">{plugin.scope}</span>
+              <span className="muted">{t("webui.Plugins.Scope")}:</span> <span className="mono">{plugin.scope === "user" ? t("webui.Plugins.ScopeUser") : t("webui.Plugins.ScopeSystem")}</span>
             </div>
             <div>
-              <span className="muted">Entry:</span> <span className="mono">{plugin.entry}</span>
+              <span className="muted">{t("webui.Plugins.Entry")}:</span> <span className="mono">{plugin.entry}</span>
             </div>
             <div>
-              <span className="muted">Min cdx:</span> <span className="mono">{plugin.min_cdx_version || "any"}</span>
+              <span className="muted">{t("webui.Plugins.MinVersion")}:</span> <span className="mono">{plugin.min_cdx_version || t("webui.Plugins.AnyVersion")}</span>
             </div>
           </div>
           <div className="text-xs">
-            <span className="muted">Directory:</span> <span className="mono">{plugin.dir}</span>
+            <span className="muted">{t("webui.Plugins.Directory")}:</span> <span className="mono">{plugin.dir}</span>
           </div>
           {plugin.source_url ? (
             <div className="text-xs">
-              <span className="muted">Source ZIP:</span> <span className="mono">{plugin.source_url}</span>
+              <span className="muted">{t("webui.Plugins.SourceZip")}:</span> <span className="mono">{plugin.source_url}</span>
             </div>
           ) : null}
-          <div className="section-caption mt-md">Tools</div>
+          <div className="section-caption mt-md">{t("webui.Plugins.TableTools")}</div>
           {tools.length === 0 ? (
-            <p className="muted text-sm">This plugin does not register LLM tools.</p>
+            <p className="muted text-sm">{t("webui.Plugins.NoTools")}</p>
           ) : (
             <div className="stack-xs">
               {tools.map((tool) => (

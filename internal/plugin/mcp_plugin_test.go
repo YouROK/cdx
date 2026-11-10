@@ -24,11 +24,12 @@ import (
 
 // fakeMCP is a minimal Streamable HTTP server used by the plugin test.
 type fakeMCP struct {
-	mu        sync.Mutex
-	tools     []map[string]any
-	resources []map[string]any
-	contents  map[string]string
-	calls     []string
+	mu           sync.Mutex
+	tools        []map[string]any
+	resources    []map[string]any
+	contents     map[string]string
+	calls        []string
+	instructions string
 }
 
 // handle answers the MCP requests the client sends.
@@ -46,12 +47,18 @@ func (f *fakeMCP) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch method {
 	case "server/discover":
-		write(map[string]any{
+		result := map[string]any{
 			"resultType":        "complete",
 			"supportedVersions": []string{mcp.RevisionModern},
 			"capabilities":      map[string]any{"tools": map[string]any{}, "resources": map[string]any{}},
 			"serverInfo":        map[string]any{"name": "fake-mcp", "version": "1.0.0"},
-		})
+		}
+		f.mu.Lock()
+		if f.instructions != "" {
+			result["instructions"] = f.instructions
+		}
+		f.mu.Unlock()
+		write(result)
 	case "tools/list":
 		f.mu.Lock()
 		tools := append([]map[string]any{}, f.tools...)
@@ -536,8 +543,8 @@ func TestMCPPluginAutoGateway(t *testing.T) {
 	loadMCPPlugin(t, mgr)
 
 	fake := &fakeMCP{}
-	tools := make([]map[string]any, 0, 21)
-	for i := 0; i < 21; i++ {
+	tools := make([]map[string]any, 0, 31)
+	for i := 0; i < 31; i++ {
 		tools = append(tools, map[string]any{
 			"name":        "tool" + strconv.Itoa(i),
 			"description": "Generated tool",
@@ -568,8 +575,8 @@ func TestMCPPluginToolBudget(t *testing.T) {
 	servers := make([]string, 0, 3)
 	for index := 0; index < 3; index++ {
 		fake := &fakeMCP{}
-		tools := make([]map[string]any, 0, 20)
-		for toolIndex := 0; toolIndex < 20; toolIndex++ {
+		tools := make([]map[string]any, 0, 25)
+		for toolIndex := 0; toolIndex < 25; toolIndex++ {
 			tools = append(tools, map[string]any{
 				"name":        "tool" + strconv.Itoa(toolIndex),
 				"description": "Generated",
@@ -597,5 +604,250 @@ func TestMCPPluginToolBudget(t *testing.T) {
 	}
 	if _, ok := findTool(reg, "mcp_call"); !ok {
 		t.Fatal("the gateway tool is missing")
+	}
+}
+
+// callJSON calls a tool and decodes its JSON output into a map.
+func callJSON(t *testing.T, reg *Registry, name string, args map[string]any) map[string]any {
+	t.Helper()
+	out, err := reg.CallTool(context.Background(), name, args)
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("%s marshal: %v", name, err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("%s decode: %v", name, err)
+	}
+	return decoded
+}
+
+// names returns the tool names of a find or list result.
+func resultNames(result map[string]any) []string {
+	items, _ := result["tools"].([]any)
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		entry, _ := item.(map[string]any)
+		if name, _ := entry["name"].(string); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// TestMCPFindToolsOrder covers exact, normalized, prefix, and word matching.
+func TestMCPFindToolsOrder(t *testing.T) {
+	mgr, reg, rtRouter, _ := mcpTestSetup(t)
+	loadMCPPlugin(t, mgr)
+
+	fake := &fakeMCP{}
+	fake.setTools(
+		map[string]any{"name": "doc_new", "description": "Create a new document", "inputSchema": map[string]any{"type": "object"}},
+		map[string]any{"name": "doc_open", "description": "Open a document", "inputSchema": map[string]any{"type": "object"}},
+		map[string]any{"name": "doc_inspect", "description": "Inspect the active document", "inputSchema": map[string]any{"type": "object"}},
+		map[string]any{"name": "layer.new", "description": "Add a layer", "inputSchema": map[string]any{"type": "object"}},
+		map[string]any{"name": "type.create", "description": "Create a text layer", "inputSchema": map[string]any{"type": "object"}},
+		map[string]any{"name": "command_run", "description": "Run a command by id", "inputSchema": map[string]any{"type": "object"}},
+	)
+	server := httptest.NewServer(http.HandlerFunc(fake.handle))
+	defer server.Close()
+
+	body := fmt.Sprintf(`{"servers":[{"id":"fake","transport":"http","url":%q,"expose":"gateway"}]}`, server.URL)
+	if status, payload := postJSON(t, rtRouter, "/api/plugins/mcp/servers", body); status != http.StatusOK {
+		t.Fatalf("save config: %d %s", status, payload)
+	}
+
+	find := func(query string) map[string]any {
+		return callJSON(t, reg, "mcp_find_tools", map[string]any{"query": query})
+	}
+
+	exact := find("doc_inspect")
+	if exact["match"] != "exact" {
+		t.Fatalf("exact match = %v, want exact", exact["match"])
+	}
+	if names := resultNames(exact); len(names) != 1 || names[0] != "doc_inspect" {
+		t.Fatalf("exact names = %v", names)
+	}
+
+	normalized := find("doc.new")
+	if normalized["match"] != "normalized" {
+		t.Fatalf("normalized match = %v, want normalized", normalized["match"])
+	}
+	if names := resultNames(normalized); len(names) != 1 || names[0] != "doc_new" {
+		t.Fatalf("normalized names = %v", names)
+	}
+
+	prefix := find("doc")
+	if prefix["match"] != "prefix" {
+		t.Fatalf("prefix match = %v", prefix["match"])
+	}
+	if names := resultNames(prefix); len(names) != 3 {
+		t.Fatalf("prefix names = %v, want three", names)
+	}
+
+	words := find("text layer")
+	if words["match"] != "words" {
+		t.Fatalf("words match = %v", words["match"])
+	}
+	if names := resultNames(words); len(names) != 1 || names[0] != "type.create" {
+		t.Fatalf("words names = %v", names)
+	}
+
+	single := find("a")
+	if count, _ := single["count"].(float64); count != 0 {
+		t.Fatalf("single-letter query returned %v tools", single["count"])
+	}
+	if hint, _ := single["hint"].(string); !strings.Contains(hint, "mcp_list_tools") {
+		t.Fatalf("single-letter query hint = %q", hint)
+	}
+
+	all := callJSON(t, reg, "mcp_list_tools", map[string]any{})
+	if count, _ := all["count"].(float64); count != 6 {
+		t.Fatalf("list count = %v, want 6", all["count"])
+	}
+	if names := resultNames(all); len(names) != 6 {
+		t.Fatalf("list names = %v", names)
+	}
+}
+
+// TestMCPAutoExposureThreshold covers the direct-to-gateway switch.
+func TestMCPAutoExposureThreshold(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		tools   int
+		gateway bool
+	}{
+		{name: "under", tools: 25, gateway: false},
+		{name: "over", tools: 31, gateway: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, reg, rtRouter, _ := mcpTestSetup(t)
+			loadMCPPlugin(t, mgr)
+
+			fake := &fakeMCP{}
+			tools := make([]map[string]any, 0, tc.tools)
+			for i := 0; i < tc.tools; i++ {
+				tools = append(tools, map[string]any{
+					"name":        fmt.Sprintf("tool%d", i),
+					"description": "Test tool",
+					"inputSchema": map[string]any{"type": "object"},
+				})
+			}
+			fake.setTools(tools...)
+			server := httptest.NewServer(http.HandlerFunc(fake.handle))
+			defer server.Close()
+
+			body := fmt.Sprintf(`{"servers":[{"id":"fake","transport":"http","url":%q}]}`, server.URL)
+			if status, payload := postJSON(t, rtRouter, "/api/plugins/mcp/servers", body); status != http.StatusOK {
+				t.Fatalf("save config: %d %s", status, payload)
+			}
+
+			_, direct := findTool(reg, "mcp_fake_tool0")
+			_, gateway := findTool(reg, "mcp_call")
+			if tc.gateway {
+				if direct || !gateway {
+					t.Fatalf("gateway=%v direct=%v, want gateway only", gateway, direct)
+				}
+				return
+			}
+			if !direct || gateway {
+				t.Fatalf("gateway=%v direct=%v, want direct only", gateway, direct)
+			}
+		})
+	}
+}
+
+// TestMCPInstructionsHook covers server instructions in the system prompt.
+func TestMCPInstructionsHook(t *testing.T) {
+	mgr, _, rtRouter, _ := mcpTestSetup(t)
+	loadMCPPlugin(t, mgr)
+
+	fake := &fakeMCP{instructions: "Start with doc_new. Discover ids with command_list."}
+	fake.setTools(map[string]any{
+		"name":        "doc_new",
+		"description": "Create a document",
+		"inputSchema": map[string]any{"type": "object"},
+	})
+	server := httptest.NewServer(http.HandlerFunc(fake.handle))
+	defer server.Close()
+
+	body := fmt.Sprintf(`{"servers":[{"id":"fake","name":"Fake Studio","transport":"http","url":%q}]}`, server.URL)
+	if status, payload := postJSON(t, rtRouter, "/api/plugins/mcp/servers", body); status != http.StatusOK {
+		t.Fatalf("save config: %d %s", status, payload)
+	}
+
+	out, err := mgr.deps.Bus.RunHook(context.Background(), "session:before_turn", map[string]any{
+		"session_id":    "s1",
+		"workdir":       t.TempDir(),
+		"system_prompt": "base prompt",
+		"messages":      []any{},
+	})
+	if err != nil {
+		t.Fatalf("run hook: %v", err)
+	}
+	prompt, _ := out["system_prompt"].(string)
+	if !strings.HasPrefix(prompt, "base prompt") {
+		t.Fatalf("the base prompt was replaced: %q", prompt)
+	}
+	for _, want := range []string{"MCP server instructions", "Fake Studio", "Start with doc_new."} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("the system prompt misses %q: %q", want, prompt)
+		}
+	}
+}
+
+// TestContextSummaryKeepsToolNames covers the compacted summary format.
+func TestContextSummaryKeepsToolNames(t *testing.T) {
+	mgr, _, _, _ := mcpTestSetup(t)
+	dir, err := filepath.Abs(filepath.Join("..", "..", "plugins", "context"))
+	if err != nil {
+		t.Fatalf("resolve context dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "main.js")); err != nil {
+		t.Skipf("context plugin is not present: %v", err)
+	}
+	if _, err := mgr.LoadPlugin(context.Background(), dir); err != nil {
+		t.Fatalf("load context plugin: %v", err)
+	}
+
+	messages := []any{
+		map[string]any{"role": "user", "content": "Build a logo"},
+		map[string]any{"role": "assistant", "content": "ok"},
+		map[string]any{"role": "tool", "name": "mcp_call", "content": "null"},
+		map[string]any{"role": "tool", "name": "mcp_call", "content": "error: tool not found"},
+		map[string]any{"role": "assistant", "content": "done"},
+	}
+	for i := 0; i < 40; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		messages = append(messages, map[string]any{"role": role, "content": fmt.Sprintf("message %d", i)})
+	}
+
+	out, err := mgr.deps.Bus.RunHook(context.Background(), "session:before_turn", map[string]any{
+		"session_id":    "summary-test",
+		"workdir":       t.TempDir(),
+		"system_prompt": "base",
+		"messages":      messages,
+	})
+	if err != nil {
+		t.Fatalf("run hook: %v", err)
+	}
+	summary, _ := out["summary"].(string)
+	for _, want := range []string{"tool mcp_call: ok", "tool mcp_call: error: tool not found", "user: Build a logo"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("the summary misses %q: %q", want, summary)
+		}
+	}
+	if strings.Contains(summary, "tool: null") {
+		t.Fatalf("the summary kept the raw tool body: %q", summary)
+	}
+	kept, _ := out["messages"].([]any)
+	if len(kept) != 40 {
+		t.Fatalf("kept messages = %d, want 40", len(kept))
 	}
 }

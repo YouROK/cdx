@@ -1,31 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 
 const PROTOCOLS = [
-  ["auto", "Auto detect"],
-  ["2026-07-28", "2026-07-28 (stateless)"],
-  ["2025-11-25", "2025-11-25 (initialize)"],
-  ["2025-06-18", "2025-06-18 (initialize)"]
+  ["auto", "mcp.ProtocolAuto"],
+  ["2026-07-28", "mcp.Protocol728"],
+  ["2025-11-25", "mcp.Protocol525"],
+  ["2025-06-18", "mcp.Protocol518"]
 ];
 
 const EXPOSURES = [
-  ["auto", "Automatic"],
-  ["direct", "Direct tools"],
-  ["gateway", "Gateway tool"],
-  ["off", "Hidden"]
+  ["auto", "mcp.ExposureAuto"],
+  ["direct", "mcp.ExposureDirect"],
+  ["gateway", "mcp.ExposureGateway"],
+  ["off", "mcp.ExposureOff"]
 ];
 
 const PERMISSIONS = [
-  ["auto", "From tool annotations"],
-  ["read", "Read"],
-  ["edit", "Edit"],
-  ["dangerous", "Dangerous"]
+  ["auto", "mcp.PermissionAuto"],
+  ["read", "mcp.PermissionRead"],
+  ["edit", "mcp.PermissionEdit"],
+  ["dangerous", "mcp.PermissionDangerous"]
 ];
 
 export function mount(container, api) {
   return api.render(<McpPanel api={api} />);
 }
 
-function Modal({ title, wide, onClose, children }) {
+function Modal({ title, wide, onClose, children, t }) {
   useEffect(() => {
     function onKey(event) {
       if (event.key === "Escape") onClose();
@@ -44,7 +44,7 @@ function Modal({ title, wide, onClose, children }) {
       <div className={"modal-box" + (wide ? " modal-wide" : "")} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-header">
           <h4>{title}</h4>
-          <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}>
+          <button type="button" className="btn-icon" aria-label={t("webui.Action.Close")} onClick={onClose}>
             &times;
           </button>
         </div>
@@ -158,6 +158,7 @@ function formToServer(form) {
 }
 
 function McpPanel({ api }) {
+  const t = api.t;
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(null);
@@ -197,7 +198,7 @@ function McpPanel({ api }) {
     setBusy(true);
     try {
       setData(await api.postJSON("/api/plugins/mcp/refresh", {}));
-      api.toast("Tool catalogs refreshed");
+      api.toast(t("mcp.Refreshed"));
     } catch (err) {
       api.toast(String(err.message || err), false);
     } finally {
@@ -206,14 +207,11 @@ function McpPanel({ api }) {
   }
 
   async function remove(server) {
-    const ok = await api.confirm(
-      "Delete MCP server",
-      "Delete server '" + server.id + "' and its stored secrets?"
-    );
+    const ok = await api.confirm(t("mcp.DeleteTitle"), t("mcp.DeleteConfirm", { id: server.id }));
     if (!ok) return;
     await saveList(
       data.servers.filter((item) => item.id !== server.id),
-      "Server deleted"
+      t("mcp.Deleted")
     );
   }
 
@@ -222,14 +220,14 @@ function McpPanel({ api }) {
       <div className="panel">
         <p className="muted">{error}</p>
         <button type="button" className="btn btn-default mt-md" onClick={load}>
-          Retry
+          {t("webui.Action.Retry")}
         </button>
       </div>
     );
   }
 
   if (!data) {
-    return <p className="muted">Loading MCP servers...</p>;
+    return <p className="muted">{t("mcp.Loading")}</p>;
   }
 
   const servers = data.servers || [];
@@ -239,19 +237,19 @@ function McpPanel({ api }) {
     <div>
       <div className="panel mb-md">
         <div className="row-between">
-          <h4 className="m-0">Model Context Protocol servers</h4>
+          <h4 className="m-0">{t("mcp.ServersTitle")}</h4>
           <div className="row-actions">
             <button type="button" className="btn btn-default" onClick={() => setImporting(true)} disabled={busy}>
-              Import mcp.json
+              {t("mcp.ImportJson")}
             </button>
             <button
               type="button"
               className="btn btn-default"
-              title="Reconnect to every server and read its tool catalog again"
+              title={t("mcp.ReconnectTitle")}
               onClick={refreshAll}
               disabled={busy}
             >
-              Reconnect
+              {t("mcp.Reconnect")}
             </button>
             <button
               type="button"
@@ -259,7 +257,7 @@ function McpPanel({ api }) {
               onClick={() => setEditing({ server: null })}
               disabled={busy}
             >
-              Add server
+              {t("mcp.AddServer")}
             </button>
           </div>
         </div>
@@ -268,9 +266,9 @@ function McpPanel({ api }) {
       {servers.length === 0 ? (
         <div className="panel">
           <p className="muted m-0">
-            No MCP servers yet. Add one with its command, such as{" "}
-            <span className="mono">npx -y @modelcontextprotocol/server-filesystem .</span>, or import an existing
-            <span className="mono"> mcp.json</span>.
+            {t("mcp.EmptyBefore")}
+            <span className="mono">npx -y @modelcontextprotocol/server-filesystem .</span>
+            {t("mcp.EmptyAfter")}
           </p>
         </div>
       ) : (
@@ -283,6 +281,7 @@ function McpPanel({ api }) {
             onEdit={() => setEditing({ server })}
             onDelete={() => remove(server)}
             onTools={() => setToolsFor(server)}
+            t={t}
           />
         ))
       )}
@@ -292,6 +291,7 @@ function McpPanel({ api }) {
           api={api}
           server={editing.server}
           servers={servers}
+          t={t}
           onClose={() => setEditing(null)}
           onSaved={(next) => {
             setData(next);
@@ -300,11 +300,12 @@ function McpPanel({ api }) {
         />
       ) : null}
 
-      {toolsFor ? <ToolsModal api={api} server={toolsFor} onClose={() => setToolsFor(null)} /> : null}
+      {toolsFor ? <ToolsModal api={api} server={toolsFor} onClose={() => setToolsFor(null)} t={t} /> : null}
 
       {importing ? (
         <ImportModal
           api={api}
+          t={t}
           onClose={() => setImporting(false)}
           onImported={(next) => {
             setData(next);
@@ -316,20 +317,22 @@ function McpPanel({ api }) {
   );
 }
 
-function statusBadge(status) {
-  if (!status) return <span className="badge badge-outline">not connected</span>;
-  if (status.disabled) return <span className="badge badge-outline">disabled</span>;
+function statusBadge(status, t) {
+  if (!status) return <span className="badge badge-outline">{t("mcp.NotConnected")}</span>;
+  if (status.disabled) return <span className="badge badge-outline">{t("mcp.Disabled")}</span>;
   if (status.connected) {
     return (
       <span className="badge badge-teal">
-        connected{status.tools !== undefined ? " - " + status.tools + " tools" : ""}
+        {status.tools !== undefined
+          ? t("mcp.ConnectedTools", { count: status.tools })
+          : t("mcp.Connected")}
       </span>
     );
   }
-  return <span className="badge badge-warn">error</span>;
+  return <span className="badge badge-warn">{t("mcp.Error")}</span>;
 }
 
-function ServerCard({ server, status, busy, onEdit, onDelete, onTools }) {
+function ServerCard({ server, status, busy, onEdit, onDelete, onTools, t }) {
   const revision = status && status.revision ? status.revision : "";
   return (
     <div className="panel mb-md">
@@ -346,15 +349,15 @@ function ServerCard({ server, status, busy, onEdit, onDelete, onTools }) {
           </div>
         </div>
         <div className="row-actions">
-          {statusBadge(status)}
+          {statusBadge(status, t)}
           <button type="button" className="btn btn-default" onClick={onTools} disabled={busy}>
-            Tools
+            {t("mcp.Tools")}
           </button>
           <button type="button" className="btn btn-default" onClick={onEdit} disabled={busy}>
-            Edit
+            {t("mcp.Edit")}
           </button>
           <button type="button" className="btn btn-danger" onClick={onDelete} disabled={busy}>
-            Delete
+            {t("mcp.Delete")}
           </button>
         </div>
       </div>
@@ -365,17 +368,17 @@ function ServerCard({ server, status, busy, onEdit, onDelete, onTools }) {
           {server.command} {(server.args || []).join(" ")}
         </p>
       )}
-      {status && status.error ? <p className="field-hint mt-2">Error: {status.error}</p> : null}
+      {status && status.error ? <p className="field-hint mt-2">{t("mcp.ErrorPrefix")}: {status.error}</p> : null}
       {status && status.server && status.server.name ? (
         <p className="field-hint mt-2">
-          Server: {status.server.name} {status.server.version || ""}
+          {t("mcp.Server")}: {status.server.name} {status.server.version || ""}
         </p>
       ) : null}
     </div>
   );
 }
 
-function SecretRows({ title, hint, rows, placeholder, onChange }) {
+function SecretRows({ title, hint, rows, placeholder, onChange, t }) {
   function update(index, field, value) {
     const next = rows.slice();
     next[index] = { ...next[index], [field]: value };
@@ -405,22 +408,22 @@ function SecretRows({ title, hint, rows, placeholder, onChange }) {
           <input
             type="password"
             value={row.value}
-            placeholder={row.key ? "leave blank to keep" : placeholder}
+            placeholder={row.key ? t("mcp.LeaveBlank") : placeholder}
             onChange={(event) => update(index, "value", event.target.value)}
           />
           <button type="button" className="btn btn-default" onClick={() => remove(index)}>
-            Remove
+            {t("mcp.Remove")}
           </button>
         </div>
       ))}
       <button type="button" className="btn btn-default mt-2" onClick={add}>
-        Add variable
+        {t("mcp.AddVariable")}
       </button>
     </div>
   );
 }
 
-function ServerModal({ api, server, servers, onClose, onSaved }) {
+function ServerModal({ api, server, servers, onClose, onSaved, t }) {
   const existing = Boolean(server);
   const [form, setForm] = useState(server ? formFromServer(server) : emptyForm());
   const [saving, setSaving] = useState(false);
@@ -440,7 +443,7 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
     setSaving(true);
     try {
       const result = await api.postJSON("/api/plugins/mcp/servers", { servers: next });
-      api.toast(existing ? "Server saved" : "Server added");
+      api.toast(existing ? t("mcp.ServerSaved") : t("mcp.ServerAdded"));
       onSaved(result);
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -463,12 +466,12 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
   }
 
   return (
-    <Modal title={existing ? "Edit server: " + server.id : "Add MCP server"} wide onClose={onClose}>
+    <Modal title={existing ? t("mcp.EditServer", { id: server.id }) : t("mcp.AddServerTitle")} wide onClose={onClose} t={t}>
       <form className="form-stack" onSubmit={submit}>
         <div className="grid-2">
           <label>
-            <span className="field-title">Server id</span>
-            <span className="field-hint">Used in tool names and permission rules; cannot change later</span>
+            <span className="field-title">{t("mcp.ServerId")}</span>
+            <span className="field-hint">{t("mcp.ServerIdHint")}</span>
             <input
               value={form.id}
               readOnly={existing}
@@ -478,35 +481,35 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
             />
           </label>
           <label>
-            <span className="field-title">Name</span>
-            <span className="field-hint">Shown in this page</span>
+            <span className="field-title">{t("mcp.Name")}</span>
+            <span className="field-hint">{t("mcp.NameHint")}</span>
             <input value={form.name} placeholder="GitHub" onChange={(event) => update("name", event.target.value)} />
           </label>
         </div>
 
         <div className="grid-3">
           <label>
-            <span className="field-title">Transport</span>
-            <span className="field-hint">A local program or an HTTP endpoint</span>
+            <span className="field-title">{t("mcp.Transport")}</span>
+            <span className="field-hint">{t("mcp.TransportHint")}</span>
             <select value={form.transport} onChange={(event) => update("transport", event.target.value)}>
               <option value="stdio">stdio</option>
               <option value="http">HTTP</option>
             </select>
           </label>
           <label>
-            <span className="field-title">Protocol</span>
-            <span className="field-hint">Auto detects the server revision</span>
+            <span className="field-title">{t("mcp.Protocol")}</span>
+            <span className="field-hint">{t("mcp.ProtocolHint")}</span>
             <select value={form.protocol} onChange={(event) => update("protocol", event.target.value)}>
               {PROTOCOLS.map(([value, label]) => (
                 <option key={value} value={value}>
-                  {label}
+                  {t(label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            <span className="field-title">Request timeout</span>
-            <span className="field-hint">Milliseconds, 0 uses the default of 120000</span>
+            <span className="field-title">{t("mcp.Timeout")}</span>
+            <span className="field-hint">{t("mcp.TimeoutHint")}</span>
             <input
               type="number"
               min="0"
@@ -519,8 +522,8 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
         {form.transport === "http" ? (
           <div className="form-stack">
             <label>
-              <span className="field-title">Endpoint URL</span>
-              <span className="field-hint">The MCP endpoint, for example https://mcp.example.com/mcp</span>
+              <span className="field-title">{t("mcp.Endpoint")}</span>
+              <span className="field-hint">{t("mcp.EndpointHint")}</span>
               <input
                 value={form.url}
                 required
@@ -529,8 +532,8 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
               />
             </label>
             <label>
-              <span className="field-title">Headers</span>
-              <span className="field-hint">One KEY=VALUE per line, stored as plain values</span>
+              <span className="field-title">{t("mcp.Headers")}</span>
+              <span className="field-hint">{t("mcp.HeadersHint")}</span>
               <textarea
                 rows={3}
                 value={form.headersText}
@@ -539,8 +542,9 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
               />
             </label>
             <SecretRows
-              title="Secret headers"
-              hint="Stored in the encrypted secrets; leave a value blank to keep the saved one"
+              title={t("mcp.SecretHeaders")}
+              hint={t("mcp.SecretHeadersHint")}
+              t={t}
               rows={form.headerSecrets}
               placeholder="Bearer token"
               onChange={(rows) => update("headerSecrets", rows)}
@@ -550,8 +554,8 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
           <div className="form-stack">
             <div className="grid-2">
               <label>
-                <span className="field-title">Command</span>
-                <span className="field-hint">The program cdx starts, for example npx</span>
+                <span className="field-title">{t("mcp.Command")}</span>
+                <span className="field-hint">{t("mcp.CommandHint")}</span>
                 <input
                   value={form.command}
                   required
@@ -560,18 +564,18 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
                 />
               </label>
               <label>
-                <span className="field-title">Working directory</span>
-                <span className="field-hint">Empty uses the session working directory</span>
+                <span className="field-title">{t("mcp.Workdir")}</span>
+                <span className="field-hint">{t("mcp.WorkdirHint")}</span>
                 <input
                   value={form.cwd}
-                  placeholder="empty = session directory"
+                  placeholder={t("mcp.WorkdirPlaceholder")}
                   onChange={(event) => update("cwd", event.target.value)}
                 />
               </label>
             </div>
             <label>
-              <span className="field-title">Arguments</span>
-              <span className="field-hint">One argument per line</span>
+              <span className="field-title">{t("mcp.Arguments")}</span>
+              <span className="field-hint">{t("mcp.ArgumentsHint")}</span>
               <textarea
                 rows={3}
                 value={form.argsText}
@@ -580,8 +584,8 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
               />
             </label>
             <label>
-              <span className="field-title">Environment</span>
-              <span className="field-hint">One KEY=VALUE per line, stored as plain values</span>
+              <span className="field-title">{t("mcp.Environment")}</span>
+              <span className="field-hint">{t("mcp.EnvironmentHint")}</span>
               <textarea
                 rows={3}
                 value={form.envText}
@@ -590,8 +594,9 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
               />
             </label>
             <SecretRows
-              title="Secret environment"
-              hint="Stored in the encrypted secrets; leave a value blank to keep the saved one"
+              title={t("mcp.SecretEnvironment")}
+              hint={t("mcp.SecretHeadersHint")}
+              t={t}
               rows={form.envSecrets}
               placeholder="token value"
               onChange={(rows) => update("envSecrets", rows)}
@@ -601,43 +606,38 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
 
         <div className="grid-3">
           <label>
-            <span className="field-title">Exposure</span>
-            <span className="field-hint">
-              Automatic uses direct tools up to 20 per server and the gateway tool above that
-            </span>
+            <span className="field-title">{t("mcp.Exposure")}</span>
+            <span className="field-hint">{t("mcp.ExposureHint")}</span>
             <select value={form.expose} onChange={(event) => update("expose", event.target.value)}>
               {EXPOSURES.map(([value, label]) => (
                 <option key={value} value={value}>
-                  {label}
+                  {t(label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            <span className="field-title">Permission</span>
-            <span className="field-hint">Overrides the level derived from tool annotations</span>
+            <span className="field-title">{t("mcp.Permission")}</span>
+            <span className="field-hint">{t("mcp.PermissionHint")}</span>
             <select value={form.permission} onChange={(event) => update("permission", event.target.value)}>
               {PERMISSIONS.map(([value, label]) => (
                 <option key={value} value={value}>
-                  {label}
+                  {t(label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            <span className="field-title">Connect this server</span>
+            <span className="field-title">{t("mcp.ConnectServer")}</span>
             <span className="check-field">
               <input
                 type="checkbox"
                 checked={form.enabled}
                 onChange={(event) => update("enabled", event.target.checked)}
               />
-              <span>Enabled</span>
+              <span>{t("webui.Schema.Enabled")}</span>
             </span>
-            <span className="field-hint">
-              A disabled server stays in the list, but cdx does not start it and does not offer its tools to the
-              model
-            </span>
+            <span className="field-hint">{t("mcp.EnabledHint")}</span>
           </label>
         </div>
 
@@ -645,12 +645,14 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
           <div className="panel">
             {testResult.ok ? (
               <p className="m-0">
-                Connected to {testResult.server && testResult.server.name ? testResult.server.name : "the server"}
-                {testResult.revision ? " with revision " + testResult.revision : ""}:{" "}
-                {(testResult.tools || []).length} tools.
+                {t("mcp.ConnectedTo", {
+                  server: testResult.server && testResult.server.name ? testResult.server.name : t("mcp.TheServer"),
+                  revision: testResult.revision ? " (" + t("mcp.Revision", { revision: testResult.revision }) + ")" : ""
+                })}{" "}
+                {t("mcp.ToolsCount", { count: (testResult.tools || []).length })}
               </p>
             ) : (
-              <p className="m-0">Connection failed: {testResult.error}</p>
+              <p className="m-0">{t("mcp.ConnectionFailed", { error: testResult.error })}</p>
             )}
             {testResult.ok && (testResult.tools || []).length > 0 ? (
               <p className="field-hint mt-2 mono">
@@ -663,15 +665,15 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
         <div className="row-between">
           <div className="row-actions">
             <button type="button" className="btn btn-default" onClick={test} disabled={testing || saving}>
-              {testing ? "Testing..." : "Test connection"}
+              {testing ? t("mcp.Testing") : t("mcp.TestConnection")}
             </button>
           </div>
           <div className="row-actions">
             <button type="button" className="btn btn-default" onClick={onClose} disabled={saving}>
-              Cancel
+              {t("webui.Action.Cancel")}
             </button>
             <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? "Saving..." : "Save server"}
+              {saving ? t("webui.Schema.Saving") : t("mcp.SaveServer")}
             </button>
           </div>
         </div>
@@ -680,7 +682,7 @@ function ServerModal({ api, server, servers, onClose, onSaved }) {
   );
 }
 
-function ToolsModal({ api, server, onClose }) {
+function ToolsModal({ api, server, onClose, t }) {
   const [tools, setTools] = useState(null);
   const [error, setError] = useState("");
 
@@ -692,13 +694,11 @@ function ToolsModal({ api, server, onClose }) {
   }, []);
 
   return (
-    <Modal title={"Tools of " + server.id} wide onClose={onClose}>
+    <Modal title={t("mcp.ToolsOf", { id: server.id })} wide onClose={onClose} t={t}>
       {error ? <p className="muted">{error}</p> : null}
-      {!tools && !error ? <p className="muted">Loading tools...</p> : null}
+      {!tools && !error ? <p className="muted">{t("mcp.LoadingTools")}</p> : null}
       {tools && tools.length === 0 ? (
-        <p className="muted">
-          The catalog is empty. Connect or refresh the server to read its tools.
-        </p>
+        <p className="muted">{t("mcp.EmptyCatalog")}</p>
       ) : null}
       {(tools || []).map((tool) => (
         <div key={tool.name} className="panel mb-xs">
@@ -710,7 +710,7 @@ function ToolsModal({ api, server, onClose }) {
   );
 }
 
-function ImportModal({ api, onClose, onImported }) {
+function ImportModal({ api, onClose, onImported, t }) {
   const [text, setText] = useState("");
   const [importing, setImporting] = useState(false);
 
@@ -737,7 +737,7 @@ function ImportModal({ api, onClose, onImported }) {
     setImporting(true);
     try {
       const result = await api.postJSON("/api/plugins/mcp/import", { json: text });
-      api.toast("Imported " + (result.imported || 0) + " servers");
+      api.toast(t("mcp.Imported", { count: result.imported || 0 }));
       onImported(result);
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -747,14 +747,11 @@ function ImportModal({ api, onClose, onImported }) {
   }
 
   return (
-    <Modal title="Import MCP servers" wide onClose={onClose}>
+    <Modal title={t("mcp.ImportTitle")} wide onClose={onClose} t={t}>
       <form className="form-stack" onSubmit={submit}>
         <label>
           <span className="field-title">mcp.json</span>
-          <span className="field-hint">
-            Paste the file used by Claude Desktop or Cursor. Values from env and headers are moved into the
-            encrypted secrets; review the commands before saving.
-          </span>
+          <span className="field-hint">{t("mcp.ImportHint")}</span>
           <textarea
             rows={10}
             value={text}
@@ -763,11 +760,11 @@ function ImportModal({ api, onClose, onImported }) {
           />
         </label>
         {text.trim() && preview === null ? (
-          <p className="field-hint">The text is not valid JSON.</p>
+          <p className="field-hint">{t("mcp.InvalidJson")}</p>
         ) : null}
         {preview && preview.length > 0 ? (
           <div className="panel">
-            <div className="field-title">Servers found: {preview.length}</div>
+            <div className="field-title">{t("mcp.ServersFound", { count: preview.length })}</div>
             {preview.map((entry) => (
               <div key={entry.name} className="mt-2">
                 <span className="badge badge-outline">{entry.transport}</span>{" "}
@@ -778,17 +775,17 @@ function ImportModal({ api, onClose, onImported }) {
           </div>
         ) : null}
         <div className="row-between">
-          <span className="field-hint">Existing servers with the same id are replaced by the imported entry.</span>
+          <span className="field-hint">{t("mcp.ReplaceHint")}</span>
           <div className="row-actions">
             <button type="button" className="btn btn-default" onClick={onClose} disabled={importing}>
-              Cancel
+              {t("webui.Action.Cancel")}
             </button>
             <button
               type="submit"
               className="btn btn-primary"
               disabled={importing || !preview || preview.length === 0}
             >
-              {importing ? "Importing..." : "Import"}
+              {importing ? t("mcp.Importing") : t("mcp.Import")}
             </button>
           </div>
         </div>

@@ -886,6 +886,8 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 	var lastUsage map[string]any
 	steps := 0
 	finished := false
+	loopStopped := false
+	loopCounts := map[string]int{}
 	budget := req.MaxSteps
 	if budget <= 0 {
 		budget = o.MaxSteps()
@@ -1056,6 +1058,31 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 					}
 				}
 
+				signature := loopSignature(toolName, args)
+				loopCounts[signature]++
+				if loopCounts[signature] >= loopGuardRepeats {
+					if !o.askLoopContinue(ctx, toolName, loopCounts[signature]) {
+						loopStopped = true
+						finished = true
+						for rest := idx; rest < len(compResp.ToolCalls); rest++ {
+							restName, _ := compResp.ToolCalls[rest]["name"].(string)
+							restID, _ := compResp.ToolCalls[rest]["id"].(string)
+							if restID == "" {
+								restID = fmt.Sprintf("call_%d_%d", steps, rest)
+							}
+							history = append(history, Message{
+								Role:       "tool",
+								Name:       restName,
+								ToolCallID: restID,
+								Content:    "error: stopped by the user: the tool was called repeatedly with the same arguments",
+								CreatedAt:  o.nowFn().Unix(),
+							})
+						}
+						break
+					}
+					loopCounts[signature] = 0
+				}
+
 				emit(TurnEvent{Type: "tool_start", Step: steps, ToolName: toolName, ToolArgs: args})
 
 				toolOut, callErr := o.registry.CallTool(ctx, toolName, args)
@@ -1093,6 +1120,9 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 				})
 				save()
 			}
+			if loopStopped {
+				break
+			}
 		}
 
 		if finished {
@@ -1122,7 +1152,9 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 	}
 
 	stoppedReason := ""
-	if !finished {
+	if loopStopped {
+		stoppedReason = "loop_detected"
+	} else if !finished {
 		stoppedReason = "max_steps"
 	} else if strings.TrimSpace(finalContent) == "" {
 		stoppedReason = "empty_answer"
@@ -1492,5 +1524,60 @@ func numToInt(v any) (int, bool) {
 		return int(n), true
 	default:
 		return 0, false
+	}
+}
+
+// loopGuardRepeats is the number of similar calls that triggers the loop question.
+const loopGuardRepeats = 10
+
+// askLoopContinue asks the client whether a repeated tool call should continue.
+func (o *Orchestrator) askLoopContinue(ctx context.Context, tool string, count int) bool {
+	answer, err := question.Ask(ctx, question.Question{
+		Source:  question.SourceCore,
+		Kind:    question.KindLoop,
+		Title:   "Repeated tool call: " + tool,
+		Body:    fmt.Sprintf("The model called %s %d times with almost the same arguments. Continue?", tool, count),
+		Details: []question.Detail{{Label: "Tool", Value: tool}, {Label: "Calls", Value: fmt.Sprintf("%d", count)}},
+		Options: []question.Option{{ID: "continue", Label: "Continue"}, {ID: "stop", Label: "Stop"}},
+		Default: "stop",
+	})
+	if err != nil {
+		return false
+	}
+	if answer.Cancelled {
+		return false
+	}
+	return answer.Choice == "continue"
+}
+
+// loopSignature names a tool call with its numbers replaced, so layer 1 and layer 2
+// count as the same call while paths and queries stay distinct.
+func loopSignature(tool string, args map[string]any) string {
+	data, err := json.Marshal(normalizeLoopValue(args))
+	if err != nil {
+		return tool
+	}
+	return tool + "|" + string(data)
+}
+
+// normalizeLoopValue replaces every numeric argument with a placeholder.
+func normalizeLoopValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = normalizeLoopValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = normalizeLoopValue(item)
+		}
+		return out
+	case float64, float32, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return "#"
+	default:
+		return value
 	}
 }

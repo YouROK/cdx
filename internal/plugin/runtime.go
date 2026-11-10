@@ -1179,6 +1179,9 @@ func (rt *Runtime) buildUIObject(vm *goja.Runtime) *goja.Object {
 		} else if ordF, ok := spec["order"].(float64); ok {
 			desc.Order = int(ordF)
 		}
+		if rt.deps.Plugins != nil {
+			desc.Order = rt.deps.Plugins.orderFor(rt.dir, desc.Order)
+		}
 		if entry, ok := spec["entry"].(string); ok {
 			desc.Entry = entry
 			desc.UIApi = 1
@@ -1380,7 +1383,7 @@ func (rt *Runtime) buildPluginsObject(vm *goja.Runtime) *goja.Object {
 		if rt.deps.Plugins == nil {
 			panic(vm.NewGoError(fmt.Errorf("plugin manager is not available")))
 		}
-		if err := rt.deps.Plugins.RemovePlugin(id); err != nil {
+		if err := rt.deps.Plugins.RemovePlugin(rt.currentCtx(), id); err != nil {
 			panic(vm.NewGoError(err))
 		}
 	})

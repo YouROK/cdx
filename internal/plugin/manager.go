@@ -33,6 +33,35 @@ type PluginInfo struct {
 	Tools         []ToolSpec `json:"tools,omitempty"`
 }
 
+// Plugin lifecycle events published on the bus.
+const (
+	EventPluginEnabled   = "plugin:enabled"
+	EventPluginDisabled  = "plugin:disabled"
+	EventPluginRemoved   = "plugin:removed"
+	EventPluginInstalled = "plugin:installed"
+	EventPluginsReloaded = "plugins:reloaded"
+)
+
+// Order bands separate vital, built-in, and external plugins.
+const (
+	orderExternalBase    = 1000
+	orderExternalDefault = 5000
+)
+
+// effectiveOrder moves user-installed plugins into the external order band.
+func effectiveOrder(scope string, order int) int {
+	if scope != "user" {
+		return order
+	}
+	if order <= 0 {
+		return orderExternalDefault
+	}
+	if order < orderExternalBase {
+		return order + orderExternalBase
+	}
+	return order
+}
+
 // Manager discovers, installs, enables/disables, tracks, and stops plugins across plugin directories.
 type Manager struct {
 	mu      sync.RWMutex
@@ -66,6 +95,45 @@ func NewManager(deps RuntimeDependencies) *Manager {
 // Registry returns the shared tool and provider registry.
 func (m *Manager) Registry() *Registry {
 	return m.deps.Registry
+}
+
+// publish emits a lifecycle event when the bus is available.
+func (m *Manager) publish(ctx context.Context, topic string, payload any) {
+	if m.deps.Bus == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.deps.Bus.Publish(ctx, topic, payload)
+}
+
+// pluginEventPayload renders plugin info as a plain map for bus subscribers.
+func pluginEventPayload(info PluginInfo) map[string]any {
+	return map[string]any{
+		"id":          info.ID,
+		"name":        info.Name,
+		"version":     info.Version,
+		"description": info.Description,
+		"source_url":  info.SourceURL,
+		"scope":       info.Scope,
+		"order":       info.Order,
+		"dir":         info.Dir,
+		"enabled":     info.Enabled,
+		"status":      info.Status,
+	}
+}
+
+// orderFor returns the effective order for a plugin directory. The shift only
+// applies when the user and system directories are separate.
+func (m *Manager) orderFor(dir string, order int) int {
+	m.mu.RLock()
+	separate := len(m.dirs) > 1
+	m.mu.RUnlock()
+	if !separate {
+		return order
+	}
+	return effectiveOrder(m.scopeForDir(dir), order)
 }
 
 // UserPluginDir returns the primary user plugin installation directory.
@@ -130,6 +198,7 @@ func (m *Manager) LoadDirs(ctx context.Context, dirs []string) error {
 				continue
 			}
 			seen[manifest.ID] = true
+			manifest.Order = m.orderFor(plugDir, manifest.Order)
 			list = append(list, candidate{dir: plugDir, scope: scope, manifest: manifest})
 		}
 	}
@@ -162,6 +231,7 @@ func (m *Manager) LoadPlugin(ctx context.Context, dir string) (*Runtime, error) 
 	if err != nil {
 		return nil, err
 	}
+	manifest.Order = m.orderFor(dir, manifest.Order)
 
 	m.mu.Lock()
 	m.deps.Plugins = m
@@ -206,14 +276,22 @@ func (m *Manager) SetEnabled(ctx context.Context, id string, enabled bool) (*Plu
 		if _, err := m.LoadPlugin(ctx, info.Dir); err != nil {
 			return nil, err
 		}
-	} else {
-		m.UnloadPlugin(id)
-		m.mu.Lock()
-		if k, ok := m.known[id]; ok {
-			k.Enabled = false
-			m.known[id] = k
-		}
-		m.mu.Unlock()
+		updated, _ := m.GetPluginInfo(id)
+		m.publish(ctx, EventPluginEnabled, pluginEventPayload(updated))
+		return &updated, nil
+	}
+
+	wasRunning := m.UnloadPlugin(id)
+	info.Enabled = false
+	info.Status = "disabled"
+	m.mu.Lock()
+	if k, ok := m.known[id]; ok {
+		k.Enabled = false
+		m.known[id] = k
+	}
+	m.mu.Unlock()
+	if wasRunning {
+		m.publish(ctx, EventPluginDisabled, pluginEventPayload(info))
 	}
 
 	updated, _ := m.GetPluginInfo(id)
@@ -221,7 +299,7 @@ func (m *Manager) SetEnabled(ctx context.Context, id string, enabled bool) (*Plu
 }
 
 // RemovePlugin stops and deletes a user-installed plugin from disk.
-func (m *Manager) RemovePlugin(id string) error {
+func (m *Manager) RemovePlugin(ctx context.Context, id string) error {
 	m.mu.RLock()
 	info, exists := m.known[id]
 	m.mu.RUnlock()
@@ -235,6 +313,7 @@ func (m *Manager) RemovePlugin(id string) error {
 				if err := os.RemoveAll(candidate); err != nil {
 					return fmt.Errorf("remove broken plugin directory: %w", err)
 				}
+				m.publish(ctx, EventPluginRemoved, map[string]any{"id": id, "dir": candidate, "scope": "user"})
 				m.log.Info("Removed broken plugin folder %s", candidate)
 				return nil
 			}
@@ -245,7 +324,11 @@ func (m *Manager) RemovePlugin(id string) error {
 		return fmt.Errorf("system plugin %q cannot be deleted (disable it instead)", id)
 	}
 
-	m.UnloadPlugin(id)
+	if m.UnloadPlugin(id) {
+		info.Enabled = false
+		info.Status = "disabled"
+		m.publish(ctx, EventPluginDisabled, pluginEventPayload(info))
+	}
 	_ = m.setDisabledState(id, false)
 
 	if err := os.RemoveAll(info.Dir); err != nil {
@@ -256,7 +339,26 @@ func (m *Manager) RemovePlugin(id string) error {
 	delete(m.known, id)
 	m.mu.Unlock()
 
+	m.publish(ctx, EventPluginRemoved, map[string]any{"id": info.ID, "dir": info.Dir, "scope": info.Scope})
 	m.log.Info("Removed plugin %s from %s", id, info.Dir)
+	return nil
+}
+
+// Reload restarts every plugin from the configured directories.
+func (m *Manager) Reload(ctx context.Context) error {
+	m.mu.RLock()
+	dirs := append([]string(nil), m.dirs...)
+	m.mu.RUnlock()
+
+	m.CloseAll()
+	if err := m.LoadDirs(ctx, dirs); err != nil {
+		return err
+	}
+
+	m.mu.RLock()
+	count := len(m.plugins)
+	m.mu.RUnlock()
+	m.publish(ctx, EventPluginsReloaded, map[string]any{"count": count})
 	return nil
 }
 

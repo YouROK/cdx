@@ -15,6 +15,7 @@ const (
 	KindPermission = "permission"
 	KindStepLimit  = "step_limit"
 	KindModel      = "model"
+	KindLoop       = "loop"
 )
 
 const (

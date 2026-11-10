@@ -41,7 +41,7 @@ Every plugin lives in its own directory (either inside `plugins/<id>` in the rep
 * `version`: semantic version `MAJOR.MINOR.PATCH`.
 * `min_cdx_version` (optional): minimum compatible `cdx` version checked before `.zip` installation.
 * `entry`: relative path to the JavaScript entry file inside the plugin directory (default: `"main.js"`).
-* `order` (optional): load priority (lower numbers load first; e.g. `providers` = `5`, `presets` = `8`, `permissions` = `10`, `context` = `15`, `tools-local` = `25`, `webui` = `90`).
+* `order` (optional): load priority in three bands. `0`-`99` is vital, `100`-`999` built-in, `1000` and above external. `i18n` uses `0`, the built-in plugins use `100`-`999`, and an external plugin with a value below `1000` is shifted by `1000` (for example `101` becomes `1101`). A missing or zero `order` becomes `5000` for a user-installed plugin. The shift applies when the user and system plugin directories are separate; a single custom directory keeps the manifest values. The value also sets the default web panel position, and an explicit `order` passed to `cdx.ui.register` goes through the same shift, so an external panel stays after the built-in pages.
 * `workers` (optional, default `0`): number of isolated worker VMs (0-16). Only functions explicitly wrapped with `cdx.inWorker(fn)` are dispatched there. Worker VMs run in separate Go goroutines, so the control VM stays responsive for HTTP routes, hooks, status, and UI. The plugin's `setup(cdx)` runs once per worker; keep it idempotent and store shared mutable state in `cdx.storage`/`cdx.secrets`. Inside a worker, `cdx.worker` is `true`, while control-plane APIs (`cdx.http`, `cdx.hooks`, `cdx.ui`, `cdx.bus`) are disabled.
 
 ---
@@ -136,6 +136,16 @@ Isolated per-plugin **AES-256-GCM** encrypted bucket (`plugin_secrets:<id>`) in 
 
 Client questions do not use the bus: call `cdx.questions.ask` instead. The old `client:prompt_user` topic is removed.
 
+The core publishes these plugin lifecycle events:
+
+* `plugin:enabled` - a plugin started after an enable action.
+* `plugin:disabled` - a running plugin stopped after a disable action, or before it is removed.
+* `plugin:removed` - the plugin directory was deleted.
+* `plugin:installed` - a `.zip` plugin was installed and started.
+* `plugins:reloaded` - every plugin was restarted by a reload.
+
+The payload carries `id`, `name`, `version`, `description`, `source_url`, `scope`, `order`, `dir`, `enabled`, and `status`. `plugin:removed` carries `id`, `dir`, and `scope`. Initial startup loads emit nothing. Delivery is synchronous, so a handler must be short and must not call back into the plugin that is changing.
+
 ### 4.9. Core HTTP Router & Gin Middleware (`cdx.http`)
 * `cdx.http.get|post|put|delete|patch(path, handler)`
 * `cdx.http.group(prefix)` -> returns a scoped router group.
@@ -220,6 +230,8 @@ export function mount(container, api) {
 `api` provides:
 
 * `plugin` - the plugin's UI descriptor.
+* `t(key, vars)` - resolves a translation key through the merged catalog, replaces `{name}` placeholders from `vars`, and returns the key when it is missing.
+* `locale` - the selected interface language.
 * `toast(message, ok)` - shell toast.
 * `confirm(title, message)` - promise-based confirmation dialog.
 * `fetchJSON(url, options)` and `postJSON(url, body)` - fetch helpers.
@@ -326,3 +338,14 @@ The legacy `window.CDXPluginPanels` registry is not used. New page panels are ES
 * `cdx.mcp.close(server)` -> closes one connection and returns whether it existed.
 
 The core answers the server requests a connection needs: `roots/list` returns the turn working directory, and `elicitation/create` is asked through `cdx.questions` (one question per requested field). Servers are dual-era: revision `2026-07-28` uses per-request metadata and `server/discover`, older servers keep the `initialize` handshake.
+
+### 4.16. Translations (`i18n`)
+
+The `i18n` plugin merges flat translation tables from all plugins and serves the catalog for the selected language. It loads first (`order: 0`) and keeps its own English base catalog.
+
+* `cdx.bus.request("i18n:register", { id: cdx.id, tables: { en: {...}, ru: {...} } })` - replaces the plugin's tables for every language. Call it from `setup(cdx)` on the control VM; worker VMs must skip it with `if (cdx.worker) return;`.
+* `cdx.bus.request("i18n:catalog", {})` -> `{ locale, revision, strings }` - the merged catalog for the selected language. Fetch it once per VM, cache it, and resolve a string with `strings[key] ?? key`.
+* Tables are flat `key -> text` maps. Recommend `<plugin-id>.<Group>.<Name>` keys, for example `providers.Form.ApiKey`. The catalog always contains the merged `en` layer, so a key missing in the selected language falls back to English and then to the key itself.
+* Layers are ordered by plugin `order`, and a later layer wins on the same key. A translation pack is an ordinary plugin that registers tables for other namespaces, so an external plugin can cover built-in strings without editing them.
+* The web shell reads the catalog from `GET /api/plugins/i18n/catalog`; `GET /api/plugins/i18n/locales` lists the available languages and `POST /api/plugins/i18n/locale` selects one.
+* A plugin that builds a client question in the control VM translates its title, body, details, and option labels from the same catalog. Keep an English literal as the fallback, so a disabled `i18n` never leaves bare keys in a prompt. It resolves panel titles and schema labels through the catalog, and page panels receive `api.t(key, vars)` and `api.locale`. Catalog values may contain `{name}` placeholders, which `t` fills from its second argument. Built-in pages, panels, and descriptors use keys from the base catalog; a plugin without keys keeps its literal text.

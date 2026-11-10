@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { useUI } from "./ui.jsx";
 
 // Hint shows a "?" button with the full explanation. The popover opens on
 // hover, on keyboard focus, and on a click, so it also works on touch screens
 // where there is no hover.
-export function Hint({ text, label = "More details" }) {
+export function Hint({ text, label }) {
+  const { t } = useUI();
+  const shownLabel = label || t("webui.Hint.More");
   const [hovered, setHovered] = useState(false);
   const [pinned, setPinned] = useState(false);
   const boxRef = useRef(null);
@@ -30,7 +33,7 @@ export function Hint({ text, label = "More details" }) {
       <button
         type="button"
         className="hint-button"
-        aria-label={label}
+        aria-label={shownLabel}
         aria-expanded={open}
         onClick={(event) => {
           event.preventDefault();

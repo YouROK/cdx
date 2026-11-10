@@ -4,7 +4,7 @@ import { useUI } from "../ui.jsx";
 import { Hint } from "../hint.jsx";
 
 export function GeneralPage({ status }) {
-  const { toast } = useUI();
+  const { toast, t } = useUI();
   const [agent, setAgent] = useState({ max_steps: 40, step_limit_mode: "ask" });
   const [sessions, setSessions] = useState({ temp_ttl_hours: 24 });
   const [loadError, setLoadError] = useState("");
@@ -39,7 +39,7 @@ export function GeneralPage({ status }) {
         step_limit_mode: agent.step_limit_mode || "ask"
       });
       setAgent(data);
-      toast("Agent limits saved");
+      toast(t("webui.General.AgentSaved"));
     } catch (err) {
       toast(String(err.message || err), false);
     }
@@ -52,7 +52,7 @@ export function GeneralPage({ status }) {
         hours: Number(sessions.temp_ttl_hours)
       });
       setSessions((current) => ({ ...current, ...data }));
-      toast("Session settings saved");
+      toast(t("webui.General.SessionsSaved"));
     } catch (err) {
       toast(String(err.message || err), false);
     }
@@ -61,52 +61,50 @@ export function GeneralPage({ status }) {
   return (
     <div>
       <div className="page-header">
-        <h3>General</h3>
+        <h3>{t("webui.Nav.General")}</h3>
       </div>
       <div className="stat-grid">
         <div className="stat-card">
-          <div className="label">Version</div>
+          <div className="label">{t("webui.General.Version")}</div>
           <div className="value">{status.version || "-"}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Protocol</div>
+          <div className="label">{t("webui.General.Protocol")}</div>
           <div className="value">v{status.protocol || 1}</div>
         </div>
         <div className="stat-card">
-          <div className="label">PID</div>
+          <div className="label">{t("webui.General.PID")}</div>
           <div className="value">{status.pid || "-"}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Loaded plugins</div>
+          <div className="label">{t("webui.General.LoadedPlugins")}</div>
           <div className="value">{(status.plugins || []).length}</div>
         </div>
       </div>
 
       {loadError ? (
         <div className="panel error-panel">
-          <h4 className="m-0 mb-xs">Settings are not available</h4>
+          <h4 className="m-0 mb-xs">{t("webui.Schema.Unavailable")}</h4>
           <p className="muted m-0">{loadError}</p>
-          <p className="muted mt-2">
-            Saving is disabled until the current values are loaded, so defaults do not overwrite them.
-          </p>
+          <p className="muted mt-2">{t("webui.Schema.DisabledHint")}</p>
           <button type="button" className="btn btn-default" onClick={loadSettings}>
             Retry
           </button>
         </div>
       ) : loading ? (
-        <p className="muted">Loading settings...</p>
+        <p className="muted">{t("webui.Schema.Loading")}</p>
       ) : (
         <div className="stack-md">
           <div className="panel">
-            <h4 className="m-0 mb-md">Agent limits</h4>
+            <h4 className="m-0 mb-md">{t("webui.General.AgentLimits")}</h4>
             <form className="form-stack" onSubmit={saveAgent}>
               <div className="grid-2">
                 <label>
                   <span className="field-title">
-                    Maximum tool steps
+                    {t("webui.General.MaxSteps")}
                     <Hint
-                      text="How many model requests one turn may make. Used when the step limit mode is not no limit."
-                      label="About maximum tool steps"
+                      text={t("webui.General.MaxStepsHint")}
+                      label={t("webui.General.MaxStepsAbout")}
                     />
                   </span>
                   <input
@@ -118,14 +116,14 @@ export function GeneralPage({ status }) {
                     value={agent.max_steps ?? 40}
                     onChange={(event) => setAgent((current) => ({ ...current, max_steps: event.target.value }))}
                   />
-                  <span className="field-hint">Model requests per turn, 1 to 200</span>
+                  <span className="field-hint">{t("webui.General.MaxStepsFieldHint")}</span>
                 </label>
                 <label>
                   <span className="field-title">
-                    When the limit is reached
+                    {t("webui.General.StepLimit")}
                     <Hint
-                      text="No step limit runs the turn until the model answers. Ask to continue offers another equal budget. Stop the turn ends it with the answer collected so far."
-                      label="About the step limit"
+                      text={t("webui.General.StepLimitHint")}
+                      label={t("webui.General.StepLimitAbout")}
                     />
                   </span>
                   <select
@@ -134,31 +132,31 @@ export function GeneralPage({ status }) {
                       setAgent((current) => ({ ...current, step_limit_mode: event.target.value }))
                     }
                   >
-                    <option value="none">No step limit</option>
-                    <option value="ask">Ask to continue</option>
-                    <option value="stop">Stop the turn</option>
+                    <option value="none">{t("webui.General.NoStepLimit")}</option>
+                    <option value="ask">{t("webui.General.AskToContinue")}</option>
+                    <option value="stop">{t("webui.General.StopTurn")}</option>
                   </select>
-                  <span className="field-hint">What happens when the model exhausts the step budget</span>
+                  <span className="field-hint">{t("webui.General.StepLimitFieldHint")}</span>
                 </label>
               </div>
               <div>
                 <button type="submit" className="btn btn-primary">
-                  Save agent limits
+                  {t("webui.General.SaveAgent")}
                 </button>
               </div>
             </form>
           </div>
 
           <div className="panel">
-            <h4 className="m-0 mb-md">Temporary sessions</h4>
+            <h4 className="m-0 mb-md">{t("webui.General.TemporarySessions")}</h4>
             <form className="form-stack" onSubmit={saveTTL}>
               <div className="grid-2">
                 <label>
                   <span className="field-title">
-                    Lifetime (hours)
+                    {t("webui.General.Lifetime")}
                     <Hint
-                      text="A temporary session expires after this many hours without activity. Persistent sessions never expire."
-                      label="About session lifetime"
+                      text={t("webui.General.LifetimeHint")}
+                      label={t("webui.General.LifetimeAbout")}
                     />
                   </span>
                   <input
@@ -167,12 +165,12 @@ export function GeneralPage({ status }) {
                     value={sessions.temp_ttl_hours || 24}
                     onChange={(event) => setSessions((current) => ({ ...current, temp_ttl_hours: event.target.value }))}
                   />
-                  <span className="field-hint">Default directory session expires after inactivity</span>
+                  <span className="field-hint">{t("webui.General.LifetimeFieldHint")}</span>
                 </label>
               </div>
               <div>
                 <button type="submit" className="btn btn-primary">
-                  Save session settings
+                  {t("webui.General.SaveSessions")}
                 </button>
               </div>
             </form>

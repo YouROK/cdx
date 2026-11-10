@@ -158,7 +158,7 @@ checks for the whole process.
 If the page reports "Access denied", reload it - the page was loaded before the
 token changed. If the `auth` plugin is disabled or removed, the API is open to
 anyone who can reach the port, which is why it is enabled by default and loads
-first (`order: 1`).
+first (`order: 100`).
 
 ### Interface development
 

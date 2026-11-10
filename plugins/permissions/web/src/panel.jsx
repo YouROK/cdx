@@ -6,34 +6,23 @@ const OUTSIDE_POLICIES = ["ask", "allow", "deny"];
 const POLICY_FIELDS = [
   {
     name: "read_policy",
-    title: "Read tools",
-    hint: "read_file, list_dir",
-    details:
-      "Read tools inspect files without changing them: read_file, list_dir, grep, glob. " +
-      "allow runs them silently, ask confirms every call, deny blocks them."
+    titleKey: "permissions.ReadTools",
+    hintKey: "permissions.ReadToolsHint",
+    detailsKey: "permissions.ReadToolsDetails"
   },
   {
     name: "edit_policy",
-    title: "Edit tools",
-    hint: "write_file, edit_file",
-    details:
-      "Edit tools create and change files: write_file, edit_file. " +
-      "allow runs them silently, ask confirms every call, deny blocks them."
+    titleKey: "permissions.EditTools",
+    hintKey: "permissions.EditToolsHint",
+    detailsKey: "permissions.EditToolsDetails"
   },
   {
     name: "dangerous_policy",
-    title: "Dangerous tools",
-    hint: "shell execution",
-    details:
-      "Dangerous tools run commands on the machine: shell. " +
-      "allow runs them silently, ask confirms every command, deny blocks them."
+    titleKey: "permissions.DangerousTools",
+    hintKey: "permissions.DangerousToolsHint",
+    detailsKey: "permissions.DangerousToolsDetails"
   }
 ];
-
-const OUTSIDE_DETAILS =
-  "ask shows a confirmation for every action that reaches outside the working folder, allow skips that confirmation, " +
-  "and deny blocks such actions. Deny is not a sandbox: commands, symlinks, and absolute paths can still leave the folder, " +
-  "so run cdx in an isolated environment when a hard limit is required.";
 
 export function mount(container, api) {
   return api.render(<PermissionsPanel api={api} />);
@@ -92,6 +81,7 @@ function Hint({ text }) {
 }
 
 function PermissionsPanel({ api }) {
+  const t = api.t;
   const [config, setConfig] = useState(null);
   const [form, setForm] = useState(null);
   const [error, setError] = useState("");
@@ -145,7 +135,7 @@ function PermissionsPanel({ api }) {
         dangerous_policy: data.dangerous_policy,
         outside_policy: data.outside_policy || "ask"
       });
-      api.toast("Permission policies saved");
+      api.toast(t("permissions.Saved"));
     } catch (err) {
       api.toast(String(err.message || err), false);
     } finally {
@@ -154,15 +144,12 @@ function PermissionsPanel({ api }) {
   }
 
   async function resetGrants() {
-    const ok = await api.confirm(
-      "Reset remembered grants",
-      "Clear all remembered always, session, and daemon permission grants?"
-    );
+    const ok = await api.confirm(t("permissions.ResetTitle"), t("permissions.ResetConfirm"));
     if (!ok) return;
     setResetting(true);
     try {
       await api.postJSON("/api/plugins/permissions/reset-grants", {});
-      api.toast("Remembered grants cleared");
+      api.toast(t("permissions.ResetDone"));
       await load();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -174,23 +161,20 @@ function PermissionsPanel({ api }) {
   if (error) {
     return (
       <div className="panel error-panel">
-        <h4 className="m-0 mb-xs">{busy ? "Waiting for the plugin" : "Permissions are not available"}</h4>
+        <h4 className="m-0 mb-xs">{busy ? t("webui.Schema.Waiting") : t("permissions.NotAvailable")}</h4>
         <p className="muted m-0">{error}</p>
         {busy ? (
-          <p className="muted mt-2">
-            The plugin is waiting for an answer in the terminal. This page refreshes by itself once the answer is
-            given.
-          </p>
+          <p className="muted mt-2">{t("webui.Schema.WaitingHint")}</p>
         ) : null}
         <button type="button" className="btn btn-default mt-3" onClick={load}>
-          Retry
+          {t("webui.Action.Retry")}
         </button>
       </div>
     );
   }
 
   if (!config || !form) {
-    return <p className="muted">Loading permissions...</p>;
+    return <p className="muted">{t("permissions.Loading")}</p>;
   }
 
   const alwaysRules = Object.keys(config.tool_rules || {});
@@ -200,23 +184,23 @@ function PermissionsPanel({ api }) {
   return (
     <div>
       <div className="panel mb-md">
-        <h4 className="m-0 mb-md">Tool policies</h4>
+        <h4 className="m-0 mb-md">{t("permissions.ToolPolicies")}</h4>
         <form className="form-stack" onSubmit={save}>
           <div className="grid-3">
             {POLICY_FIELDS.map((field) => (
               <label key={field.name}>
                 <span className="field-title">
-                  {field.title}
-                  <Hint text={field.details} />
+                  {t(field.titleKey)}
+                  <Hint text={t(field.detailsKey)} />
                 </span>
-                <span className="field-hint">{field.hint}</span>
+                <span className="field-hint">{t(field.hintKey)}</span>
                 <select
                   value={form[field.name]}
                   onChange={(event) => setForm({ ...form, [field.name]: event.target.value })}
                 >
                   {POLICIES.map((policy) => (
                     <option key={policy} value={policy}>
-                      {policy}
+                      {t("permissions.Policy" + policy.charAt(0).toUpperCase() + policy.slice(1))}
                     </option>
                   ))}
                 </select>
@@ -227,29 +211,27 @@ function PermissionsPanel({ api }) {
           <div className="grid-2">
             <label>
               <span className="field-title">
-                Outside the working folder
-                <Hint text={OUTSIDE_DETAILS} />
+                {t("permissions.Outside")}
+                <Hint text={t("permissions.OutsideDetails")} />
               </span>
-              <span className="field-hint">Ask, allow, or deny actions that leave the working folder</span>
+              <span className="field-hint">{t("permissions.OutsideHint")}</span>
               <select
                 value={form.outside_policy}
                 onChange={(event) => setForm({ ...form, outside_policy: event.target.value })}
               >
                 {OUTSIDE_POLICIES.map((policy) => (
                   <option key={policy} value={policy}>
-                    {policy}
+                    {t("permissions.Policy" + policy.charAt(0).toUpperCase() + policy.slice(1))}
                   </option>
                 ))}
               </select>
-              <span className="field-hint">
-                Deny is not a sandbox; run cdx in an isolated environment for a hard limit.
-              </span>
+              <span className="field-hint">{t("permissions.OutsideFieldHint")}</span>
             </label>
           </div>
 
           <div>
             <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? "Saving..." : "Save policies"}
+              {saving ? t("webui.Schema.Saving") : t("permissions.Save")}
             </button>
           </div>
         </form>
@@ -257,29 +239,26 @@ function PermissionsPanel({ api }) {
 
       <div className="panel">
         <div className="row-between mb-xs">
-          <h4 className="m-0">Remembered grants</h4>
+          <h4 className="m-0">{t("permissions.Grants")}</h4>
           <button
             type="button"
             className="btn btn-danger btn-xs"
             disabled={resetting || alwaysRules.length + daemonGrants.length + sessionGrants.length === 0}
             onClick={resetGrants}
           >
-            {resetting ? "Resetting..." : "Reset grants"}
+            {resetting ? t("permissions.Resetting") : t("permissions.Reset")}
           </button>
         </div>
-        <p className="field-hint mb-md">
-          Grants remembered after answering a permission prompt: "always" is stored in the plugin config,
-          "daemon" lasts until the daemon stops, "session" lasts for one session.
-        </p>
-        <GrantRow title="Always" detail="Stored tool rules" items={alwaysRules} />
-        <GrantRow title="Daemon" detail="Until the daemon stops" items={daemonGrants} />
-        <GrantRow title="Sessions" detail="Per session" items={sessionGrants} />
+        <p className="field-hint mb-md">{t("permissions.GrantsHint")}</p>
+        <GrantRow title={t("permissions.Always")} detail={t("permissions.AlwaysHint")} items={alwaysRules} noneLabel={t("permissions.None")} />
+        <GrantRow title={t("permissions.Daemon")} detail={t("permissions.DaemonHint")} items={daemonGrants} noneLabel={t("permissions.None")} />
+        <GrantRow title={t("permissions.Sessions")} detail={t("permissions.SessionsHint")} items={sessionGrants} noneLabel={t("permissions.None")} />
       </div>
     </div>
   );
 }
 
-function GrantRow({ title, detail, items }) {
+function GrantRow({ title, detail, items, noneLabel }) {
   return (
     <div className="grant-row">
       <div>
@@ -288,7 +267,7 @@ function GrantRow({ title, detail, items }) {
       </div>
       <div className="grant-values">
         {items.length === 0 ? (
-          <span className="badge badge-outline mono text-xs">none</span>
+          <span className="badge badge-outline mono text-xs">{noneLabel}</span>
         ) : (
           items.map((item) => (
             <span key={item} className="badge badge-outline mono text-xs">

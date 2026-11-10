@@ -4,6 +4,6 @@
   "version": "1.0.0",
   "description": "Connects to Model Context Protocol servers over stdio or HTTP and exposes their tools to the model",
   "entry": "main.js",
-  "order": 30,
+  "order": 170,
   "workers": 8
 }

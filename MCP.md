@@ -142,16 +142,49 @@ Tools from different servers never collide, and neither do they collide with the
 
 ### Exposure modes
 
-* `auto` (default) - `direct` up to 20 tools, `gateway` above that.
+* `auto` (default) - `direct` up to 30 tools, `gateway` above that.
 * `direct` - one tool per MCP tool. Best for a small server.
-* `gateway` - one tool, `mcp_call(server, tool, arguments)`, plus `mcp_find_tools(query)`. The model
-  loads the catalog on demand, because the tool list is repeated in the system prompt and in every
-  provider request.
+* `gateway` - one tool, `mcp_call(server, tool, arguments)`, plus `mcp_find_tools` and
+  `mcp_list_tools`. The model loads the catalog on demand, because the tool list is repeated in the
+  system prompt and in every provider request.
 * `off` - connected and browsable in the settings page, but not offered to the model.
 
-Automatic exposure also keeps the total number of direct tools across servers at 48: servers beyond
+Automatic exposure also keeps the total number of direct tools across servers at 64: servers beyond
 that budget switch to the gateway, so a few large servers cannot flood the context. Explicit
 `direct` entries are honored anyway.
+
+Each direct tool adds its JSON schema to every provider request, so the threshold trades context
+for discovery. Weak models pick better from a short list; a server with a few dozen tools is still
+manageable, and the settings page allows `direct` for a server whose catalog is worth it.
+
+### Tool discovery
+
+`mcp_find_tools(query, server?)` matches in this order:
+
+1. the exact tool name;
+2. the exact name without separators, so `Doc_New` and `doc.new` both match `doc_new`;
+3. the name prefix;
+4. words in any order in the name or description; a name match weighs more than a description
+   match.
+
+A one-letter query never runs the word search: it returns a hint to use `mcp_list_tools`, which
+lists every tool (optionally for one server). This prevents the model from scanning the alphabet
+with single letters.
+
+### Instructions
+
+A server may report `instructions` during the handshake. The plugin appends them to the system
+prompt in `session:before_turn` under `## MCP server instructions`, capped at 2000 characters per
+server and 6000 in total. The text is declared by the server, so it is untrusted input: it can
+guide the model, but it cannot grant permissions or bypass the permission rules.
+
+### Loop guard
+
+The session loop counts tool calls per turn by tool name plus arguments with numbers replaced, so
+`layer: 1` and `layer: 2` share a signature. When one signature reaches 10 calls, the client gets a
+`loop` question: continue, or stop the turn. Stopping writes an error tool result for the pending
+call and ends the turn with `loop_detected`; continuing resets the counter, so the question can
+return after another 10 calls. Without an interactive client the turn stops.
 
 ### Permissions
 

@@ -4,7 +4,7 @@ export function mount(container, api) {
   return api.render(<PresetsPanel api={api} />);
 }
 
-function Modal({ title, wide, onClose, children }) {
+function Modal({ title, wide, onClose, children, t }) {
   useEffect(() => {
     function onKey(event) {
       if (event.key === "Escape") onClose();
@@ -23,7 +23,7 @@ function Modal({ title, wide, onClose, children }) {
       <div className={"modal-box" + (wide ? " modal-wide" : "")} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-header">
           <h4>{title}</h4>
-          <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}>
+          <button type="button" className="btn-icon" aria-label={t("webui.Action.Close")} onClick={onClose}>
             &times;
           </button>
         </div>
@@ -34,6 +34,7 @@ function Modal({ title, wide, onClose, children }) {
 }
 
 function PresetsPanel({ api }) {
+  const t = api.t;
   const [presets, setPresets] = useState([]);
   const [modal, setModal] = useState(null);
 
@@ -56,7 +57,7 @@ function PresetsPanel({ api }) {
   async function activate(id) {
     try {
       await api.postJSON("/api/plugins/presets/active", { id });
-      api.toast("Preset activated: " + id);
+      api.toast(t("presets.Activated", { id: id }));
       load();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -64,11 +65,11 @@ function PresetsPanel({ api }) {
   }
 
   async function remove(id) {
-    const ok = await api.confirm("Delete preset", "Delete custom preset '" + id + "'?");
+    const ok = await api.confirm(t("presets.DeleteTitle"), t("presets.DeleteConfirm", { id: id }));
     if (!ok) return;
     try {
       await api.fetchJSON("/api/plugins/presets/custom/" + encodeURIComponent(id), { method: "DELETE" });
-      api.toast("Preset deleted");
+      api.toast(t("presets.Deleted"));
       load();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -78,18 +79,15 @@ function PresetsPanel({ api }) {
   return (
     <div>
       <div className="row-between mb-md">
-        <p className="page-intro m-0">
-          A preset changes how the agent behaves and answers. The list of tools and environment are collected
-          automatically on every request.
-        </p>
+        <p className="page-intro m-0">{t("presets.Intro")}</p>
         <button type="button" className="btn btn-primary" onClick={() => setModal({ type: "edit" })}>
-          Create preset
+          {t("presets.Create")}
         </button>
       </div>
 
       <div className="stack-md">
         <div>
-          <div className="section-caption mb-xs">Built in</div>
+          <div className="section-caption mb-xs">{t("presets.BuiltinSection")}</div>
           <div className="grid-3">
             {builtin.map((preset) => (
               <PresetTile
@@ -99,13 +97,14 @@ function PresetsPanel({ api }) {
                 onView={() => setModal({ type: "view", preset })}
                 onEdit={() => setModal({ type: "edit", preset })}
                 onDelete={() => remove(preset.id)}
+                t={t}
               />
             ))}
           </div>
         </div>
         {custom.length > 0 ? (
           <div>
-            <div className="section-caption mb-xs">Yours</div>
+            <div className="section-caption mb-xs">{t("presets.Yours")}</div>
             <div className="grid-3">
               {custom.map((preset) => (
                 <PresetTile
@@ -115,6 +114,7 @@ function PresetsPanel({ api }) {
                   onView={() => setModal({ type: "view", preset })}
                   onEdit={() => setModal({ type: "edit", preset })}
                   onDelete={() => remove(preset.id)}
+                  t={t}
                 />
               ))}
             </div>
@@ -134,12 +134,12 @@ function PresetsPanel({ api }) {
         />
       ) : null}
       {modal?.type === "view" ? (
-        <Modal title={"Prompt: " + (modal.preset.name || modal.preset.id)} onClose={() => setModal(null)}>
-          <p className="field-hint mb-xs">{modal.preset.builtin ? "Built-in preset (read-only)" : "Custom preset"}</p>
+        <Modal title={t("presets.PromptTitle", { name: modal.preset.name || modal.preset.id })} onClose={() => setModal(null)} t={t}>
+          <p className="field-hint mb-xs">{modal.preset.builtin ? t("presets.BuiltinReadonly") : t("presets.Custom")}</p>
           <pre className="code-block">{modal.preset.prompt || ""}</pre>
           <div className="modal-actions mt-md">
             <button type="button" className="btn btn-default" onClick={() => setModal(null)}>
-              Close
+              {t("webui.Action.Close")}
             </button>
           </div>
         </Modal>
@@ -148,7 +148,7 @@ function PresetsPanel({ api }) {
   );
 }
 
-function PresetTile({ preset, onActivate, onView, onEdit, onDelete }) {
+function PresetTile({ preset, onActivate, onView, onEdit, onDelete, t }) {
   return (
     <div
       className="provider-card"
@@ -163,7 +163,7 @@ function PresetTile({ preset, onActivate, onView, onEdit, onDelete }) {
       <div>
         <div className="row-gap-xs">
           <h4 className="m-0">{preset.name || preset.id}</h4>
-          {preset.active ? <span className="badge badge-accent">active</span> : null}
+          {preset.active ? <span className="badge badge-accent">{t("presets.Active")}</span> : null}
         </div>
         <div className="mono text-xs muted mt-2">{preset.id}</div>
       </div>
@@ -172,18 +172,18 @@ function PresetTile({ preset, onActivate, onView, onEdit, onDelete }) {
       </div>
       <div className="row-gap-xs">
         <button type="button" className="btn btn-light btn-xs" disabled={preset.active} onClick={onActivate}>
-          Use this preset
+          {t("presets.Use")}
         </button>
         <button type="button" className="btn btn-default btn-xs" onClick={onView}>
-          Show prompt
+          {t("presets.ShowPrompt")}
         </button>
         {!preset.builtin ? (
           <>
             <button type="button" className="btn btn-default btn-xs" onClick={onEdit}>
-              Edit
+              {t("presets.Edit")}
             </button>
             <button type="button" className="btn btn-danger btn-xs" onClick={onDelete}>
-              Delete
+              {t("presets.Delete")}
             </button>
           </>
         ) : null}
@@ -193,6 +193,7 @@ function PresetTile({ preset, onActivate, onView, onEdit, onDelete }) {
 }
 
 function PresetModal({ api, preset, onClose, onSaved }) {
+  const t = api.t;
   const existing = Boolean(preset);
   const [form, setForm] = useState(
     preset || { id: "", name: "", description: "", prompt: "" }
@@ -208,7 +209,7 @@ function PresetModal({ api, preset, onClose, onSaved }) {
         description: form.description,
         prompt: form.prompt
       });
-      api.toast("Preset saved");
+      api.toast(t("presets.Saved"));
       onSaved();
     } catch (err) {
       api.toast(String(err.message || err), false);
@@ -216,12 +217,12 @@ function PresetModal({ api, preset, onClose, onSaved }) {
   }
 
   return (
-    <Modal title={existing ? "Edit preset: " + preset.name : "New preset"} wide onClose={onClose}>
+    <Modal title={existing ? t("presets.EditTitle", { name: preset.name }) : t("presets.New")} wide onClose={onClose} t={t}>
       <form className="form-stack" onSubmit={submit}>
         <div className="grid-2">
           <label>
-            Name
-            <span className="field-hint">Shown on the tile</span>
+            {t("presets.Name")}
+            <span className="field-hint">{t("presets.NameHint")}</span>
             <input
               placeholder="Review"
               required
@@ -230,8 +231,8 @@ function PresetModal({ api, preset, onClose, onSaved }) {
             />
           </label>
           <label>
-            Identifier
-            <span className="field-hint">Used by --preset</span>
+            {t("presets.Identifier")}
+            <span className="field-hint">{t("presets.IdentifierHint")}</span>
             <input
               placeholder="review"
               required
@@ -242,16 +243,16 @@ function PresetModal({ api, preset, onClose, onSaved }) {
           </label>
         </div>
         <label>
-          Description
-          <span className="field-hint">One line telling when to use this preset</span>
+          {t("presets.FormDescription")}
+          <span className="field-hint">{t("presets.DescriptionHint")}</span>
           <input
             value={form.description || ""}
             onChange={(event) => setForm({ ...form, description: event.target.value })}
           />
         </label>
         <label>
-          Prompt
-          <span className="field-hint">The explaining part of the system prompt</span>
+          {t("presets.Prompt")}
+          <span className="field-hint">{t("presets.PromptHint")}</span>
           <textarea
             rows="12"
             className="mono text-xs"
@@ -262,10 +263,10 @@ function PresetModal({ api, preset, onClose, onSaved }) {
         </label>
         <div className="modal-actions">
           <button type="button" className="btn btn-default" onClick={onClose}>
-            Cancel
+            {t("webui.Action.Cancel")}
           </button>
           <button type="submit" className="btn btn-primary">
-            Save
+            {t("presets.Save")}
           </button>
         </div>
       </form>

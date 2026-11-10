@@ -86,17 +86,17 @@ function setup(cdx) {
   });
 
   cdx.ui.register({
-    title: "API access",
-    description: "Token protection for the HTTP API and the local-host check",
-    order: 1030,
+    title: "auth.Title",
+    description: "auth.Description",
+    order: 990,
     schema: {
       type: "object",
-      title: "Access settings",
+      title: "auth.Schema.Title",
       properties: {
         allow_remote_host: {
           type: "boolean",
-          title: "Allow non-local host header",
-          description: "Lets other machines reach the API through a proxy or SSH tunnel. The token is still required. Setting CDX_ALLOW_REMOTE_HOST disables both checks.",
+          title: "auth.Schema.AllowRemoteHost",
+          description: "auth.Schema.AllowRemoteHostHint",
           default: false
         }
       }

@@ -12,6 +12,10 @@ func TestAPIDocCoversHTTPContext(t *testing.T) {
 		"ctx.bindJSON()",
 		"ctx.json(code, value)",
 		"ctx.abortWithJSON(code, value)",
+		"i18n:register",
+		"i18n:catalog",
+		"plugin:enabled",
+		"Order bands",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Fatalf("the API reference does not mention %q", want)

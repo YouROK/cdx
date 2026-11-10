@@ -247,3 +247,37 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Document the plugin, the server configuration, and the protocols in `MCP.md`, `PLUGINS.md`, and `README.md`.
 - [x] Add a daemon test with a fake MCP server that runs a full turn calling its tool.
 - [x] Verify installation and packaging of the new plugin.
+
+## Stage 35: Plugin Lifecycle Events and Priority Bands
+- [x] Publish `plugin:enabled`, `plugin:disabled`, `plugin:removed`, `plugin:installed`, and `plugins:reloaded` with the plugin state.
+- [x] Shift user-installed plugins into the external order band and default a missing order to `5000`.
+- [x] Renumber built-in plugins and their UI panels into the `100`-`999` band.
+- [x] Cover order normalization, lifecycle events, and reload with tests.
+- [x] Document the order bands and lifecycle events in `ARCHITECTURE.md` and `PLUGINS.md`.
+
+## Stage 36: Translation Catalog Plugin
+- [x] Add `plugins/i18n` with `order: 0` and the base English catalog.
+- [x] Accept translation tables over `i18n:register` on the control VM and merge them by plugin priority.
+- [x] Serve the merged catalog to plugins and the web shell, store the selected language, and expose the `Translations` page.
+- [x] Drop a plugin's tables on `plugin:disabled` and `plugin:removed`.
+- [x] Cover layering, English fallback, locale switch, disable, enable, and reload with a plugin test.
+
+## Stage 37: Web Shell Translations
+- [x] Fetch the merged catalog with the dashboard status and expose `t(key)` through the UI context.
+- [x] Translate navigation labels, page headers, panel titles, and JSON Schema labels.
+- [x] Pass `t(key)` and the selected language to page panels through the panel API.
+- [x] Move the built-in panel titles and schema labels to keys in the base catalog.
+- [x] Sort the menu by the translated labels.
+
+## Stage 38: Page and Panel Translations
+- [x] Translate the General, Sessions, Plugins, Logs, and Live Session page strings.
+- [x] Translate the Providers, Presets, Permissions, and MCP panel strings.
+- [x] Translate message role labels, token counters, and hint labels.
+- [x] Add every new English value to the base catalog.
+- [x] Rebuild the web assets and keep the frontend and backend tests passing.
+
+## Stage 39: Plugin Question Translations
+- [x] Translate permission question titles, bodies, detail labels, and option labels from the catalog.
+- [x] Keep English literals as fallbacks when `i18n` is unavailable.
+- [x] Cover a translated permission prompt with a plugin test.
+- [x] Add a frontend test that checks every literal `t()` key against the base catalog.

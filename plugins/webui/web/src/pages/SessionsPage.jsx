@@ -5,7 +5,7 @@ import { groupSessions } from "../sessionGroups.js";
 import { useUI } from "../ui.jsx";
 
 export function SessionsPage({ sessionId, onOpen, onLive, onBack }) {
-  const { toast, confirm } = useUI();
+  const { toast, confirm, t } = useUI();
   const [data, setData] = useState({ sessions: [], temp_ttl_hours: 24, live: [] });
   const [expanded, setExpanded] = useState({});
   const [detail, setDetail] = useState(null);
@@ -65,7 +65,7 @@ export function SessionsPage({ sessionId, onOpen, onLive, onBack }) {
     const kind = session.kind === "persistent" ? "temp" : "persistent";
     try {
       await postJSON("/api/core/sessions/" + encodeURIComponent(session.id) + "/mode", { kind });
-      toast("Session is now " + kind);
+      toast(kind === "persistent" ? t("webui.Sessions.NowPersistent") : t("webui.Sessions.NowTemp"));
       await loadSessions();
     } catch (err) {
       toast(String(err.message || err), false);
@@ -79,13 +79,13 @@ export function SessionsPage({ sessionId, onOpen, onLive, onBack }) {
   async function removeSession(session) {
     const name = session.title || session.id;
     const ok = await confirm(
-      "Delete session",
-      "Delete '" + name + "' and its message history? Sub-sessions are deleted with it.",
+      t("webui.Sessions.DeleteTitle"),
+      t("webui.Sessions.DeleteConfirm", { name: name }),
     );
     if (!ok) return;
     try {
       await apiFetch("/api/core/sessions/" + encodeURIComponent(session.id), { method: "DELETE" });
-      toast("Session deleted");
+      toast(t("webui.Sessions.Deleted"));
       await loadSessions();
     } catch (err) {
       toast(String(err.message || err), false);
@@ -98,13 +98,13 @@ export function SessionsPage({ sessionId, onOpen, onLive, onBack }) {
         <div>
           <div className="page-header">
             <h3>
-              Session: <span className="mono">{sessionId}</span>
+              {t("webui.Sessions.SessionLabel")}: <span className="mono">{sessionId}</span>
             </h3>
             <button type="button" className="btn btn-default btn-xs" onClick={onBack}>
-              &larr; Back to sessions
+              &larr; {t("webui.Sessions.Back")}
             </button>
           </div>
-          <p className="muted">{detailLoading ? "Loading session..." : "Session was not found."}</p>
+          <p className="muted">{detailLoading ? t("webui.Sessions.LoadingDetail") : t("webui.Sessions.NotFound")}</p>
         </div>
       );
     }
@@ -125,18 +125,14 @@ export function SessionsPage({ sessionId, onOpen, onLive, onBack }) {
   return (
     <div>
       <div className="page-header">
-        <h3>Sessions</h3>
+        <h3>{t("webui.Nav.Sessions")}</h3>
       </div>
-      <p className="page-intro">
-        Sessions are bound to a directory and inherited by subdirectories. Temporary sessions expire after{" "}
-        {ttl} hours of inactivity; persistent sessions never expire. Subagent sessions live under their
-        parent and are deleted with it.
-      </p>
+      <p className="page-intro">{t("webui.Sessions.Intro", { hours: ttl })}</p>
       <div className="panel panel-flush">
         {loading ? (
-          <p className="muted panel-pad">Loading sessions...</p>
+          <p className="muted panel-pad">{t("webui.Sessions.Loading")}</p>
         ) : list.length === 0 ? (
-          <p className="muted panel-pad">No active sessions.</p>
+          <p className="muted panel-pad">{t("webui.Sessions.Empty")}</p>
         ) : (
           <table className="table sessions-table">
             <colgroup>
@@ -148,10 +144,10 @@ export function SessionsPage({ sessionId, onOpen, onLive, onBack }) {
             </colgroup>
             <thead>
               <tr>
-                <th>Session</th>
-                <th>Directory</th>
-                <th>Msg</th>
-                <th>Updated</th>
+                <th>{t("webui.Sessions.TableSession")}</th>
+                <th>{t("webui.Sessions.TableDirectory")}</th>
+                <th>{t("webui.Sessions.TableMessages")}</th>
+                <th>{t("webui.Sessions.TableUpdated")}</th>
                 <th />
               </tr>
             </thead>
@@ -199,10 +195,10 @@ export function SessionsPage({ sessionId, onOpen, onLive, onBack }) {
   );
 }
 
-function kindLabel(session, ttl) {
-  if (session.kind === "persistent") return "persistent";
-  if (session.kind === "subagent") return "subagent";
-  return "temp (" + ttl + "h)";
+function kindLabel(session, ttl, t) {
+  if (session.kind === "persistent") return t("webui.Sessions.KindPersistent");
+  if (session.kind === "subagent") return t("webui.Sessions.KindSubagent");
+  return t("webui.Sessions.KindTemp", { hours: ttl });
 }
 
 function SessionRow({
@@ -218,7 +214,8 @@ function SessionRow({
   onToggleMode,
   onDelete,
 }) {
-  const title = session.title || "Untitled session";
+  const { t } = useUI();
+  const title = session.title || t("webui.Sessions.Untitled");
   const canChangeMode = session.kind === "temp" || session.kind === "persistent";
   return (
     <tr className={isChild ? "session-child" : undefined}>
@@ -237,14 +234,14 @@ function SessionRow({
               {live ? (
                 <span className="badge badge-teal live-badge">
                   <span className="live-dot" />
-                  live
+                  {t("webui.Sessions.Live")}
                 </span>
               ) : null}
             </div>
             <div className="mono text-xs muted sess-id">{session.id}</div>
           </div>
           <span className={session.kind === "persistent" ? "badge badge-teal" : "badge badge-accent"}>
-            {kindLabel(session, ttl)}
+            {kindLabel(session, ttl, t)}
           </span>
         </div>
       </td>
@@ -255,20 +252,22 @@ function SessionRow({
         <div className="row-actions">
           {childCount > 0 ? (
             <button type="button" className="btn btn-light btn-xs" onClick={onToggle}>
-              {expanded ? "Hide sub-sessions" : "Sub-sessions (" + childCount + ")"}
+              {expanded
+                ? t("webui.Sessions.HideSub")
+                : t("webui.Sessions.ShowSub", { count: childCount })}
             </button>
           ) : null}
           <button type="button" className="btn btn-light btn-xs" onClick={() => onLive(session.id)}>
-            Live
+            {t("webui.Sessions.LiveButton")}
           </button>
           {!isChild && canChangeMode ? (
             <button type="button" className="btn btn-light btn-xs" onClick={() => onToggleMode(session)}>
-              {session.kind === "persistent" ? "Temp" : "Persist"}
+              {session.kind === "persistent" ? t("webui.Sessions.Temp") : t("webui.Sessions.Persist")}
             </button>
           ) : null}
           {!isChild ? (
             <button type="button" className="btn btn-danger btn-xs" onClick={() => onDelete(session)}>
-              Delete
+              {t("webui.Sessions.Delete")}
             </button>
           ) : null}
         </div>
@@ -278,6 +277,7 @@ function SessionRow({
 }
 
 function SessionDetail({ detail, onBack, onLive, onOpen }) {
+  const { t } = useUI();
   const session = detail.session || {};
   const messages = detail.messages || [];
   let totalIn = session.tokens_in || 0;
@@ -293,14 +293,14 @@ function SessionDetail({ detail, onBack, onLive, onOpen }) {
     <div>
       <div className="page-header">
         <div>
-          <h3>{session.title || "Session"}</h3>
+          <h3>{session.title || t("webui.Sessions.SessionLabel")}</h3>
           <div className="mono text-xs muted">
             {session.id}
             {session.workdir ? " \u00b7 " + session.workdir : ""}
           </div>
           {session.parent_id ? (
             <div className="text-xs muted">
-              Sub-session of{" "}
+              {t("webui.Sessions.SubOf")}{" "}
               <button
                 type="button"
                 className="link-button mono text-xs"
@@ -311,33 +311,33 @@ function SessionDetail({ detail, onBack, onLive, onOpen }) {
             </div>
           ) : null}
           {session.stopped_reason ? (
-            <div className="badge badge-warn mt-2">stopped: {session.stopped_reason}</div>
+            <div className="badge badge-warn mt-2">{t("webui.Sessions.Stopped")}: {session.stopped_reason}</div>
           ) : null}
         </div>
         <div className="row-gap-xs">
           <button type="button" className="btn btn-light btn-xs" onClick={onLive}>
-            Live
+            {t("webui.Sessions.LiveButton")}
           </button>
           <button type="button" className="btn btn-default btn-xs" onClick={onBack}>
-            &larr; Back to sessions
+            &larr; {t("webui.Sessions.Back")}
           </button>
         </div>
       </div>
       <div className="stat-grid">
         <div className="stat-card">
-          <div className="label">Messages</div>
+          <div className="label">{t("webui.Sessions.Messages")}</div>
           <div className="value">{messages.length}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Input tokens (est.)</div>
+          <div className="label">{t("webui.Sessions.InputTokens")}</div>
           <div className="value">{totalIn}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Output tokens (est.)</div>
+          <div className="label">{t("webui.Sessions.OutputTokens")}</div>
           <div className="value">{totalOut}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Total tokens</div>
+          <div className="label">{t("webui.Sessions.TotalTokens")}</div>
           <div className="value">{totalIn + totalOut}</div>
         </div>
       </div>

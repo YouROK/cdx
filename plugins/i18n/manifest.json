@@ -1,0 +1,8 @@
+{
+  "id": "i18n",
+  "name": "Translations",
+  "version": "1.0.0",
+  "description": "Collects translation tables from plugins and serves the merged catalog for the selected language",
+  "entry": "main.js",
+  "order": 0
+}

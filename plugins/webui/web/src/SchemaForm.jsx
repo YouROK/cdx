@@ -49,7 +49,7 @@ export function SchemaForm({ descriptor }) {
   const schema = descriptor.schema || {};
   const endpoint = descriptor.config_url || "/api/core/plugins/" + encodeURIComponent(descriptor.plugin_id) + "/settings";
   const generic = !descriptor.config_url;
-  const { toast } = useUI();
+  const { toast, t } = useUI();
   const [loadedSchema, setLoadedSchema] = useState(schema);
   const [values, setValues] = useState(() => defaultsOf(schema));
   const [secrets, setSecrets] = useState({});
@@ -127,12 +127,12 @@ export function SchemaForm({ descriptor }) {
       try {
         parsed = parseValue(value, prop);
       } catch {
-        toast("Field " + (prop.title || name) + " contains invalid JSON", false);
+        toast(t("webui.Schema.FieldInvalidJSON", { name: t(prop.title || name) }), false);
         return;
       }
       if (parsed === undefined) {
         if (required.has(name)) {
-          toast("Field " + (prop.title || name) + " is required", false);
+          toast(t("webui.Schema.FieldRequired", { name: t(prop.title || name) }), false);
           return;
         }
         continue;
@@ -150,7 +150,7 @@ export function SchemaForm({ descriptor }) {
       } else {
         setValues({ ...defaultsOf(schema), ...(data || payload) });
       }
-      toast("Settings saved");
+      toast(t("webui.Schema.Saved"));
     } catch (err) {
       const message = String(err.message || err);
       setError(message);
@@ -161,32 +161,27 @@ export function SchemaForm({ descriptor }) {
   }
 
   if (loading) {
-    return <p className="muted">Loading settings...</p>;
+    return <p className="muted">{t("webui.Schema.Loading")}</p>;
   }
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <h3>{loadedSchema?.title || descriptor.title}</h3>
-          {descriptor.description ? <p className="page-intro m-0">{descriptor.description}</p> : null}
+          <h3>{t(loadedSchema?.title || descriptor.title)}</h3>
+          {descriptor.description ? <p className="page-intro m-0">{t(descriptor.description)}</p> : null}
         </div>
       </div>
       {failed ? (
         <div className="panel error-panel">
-          <h4 className="m-0 mb-xs">{busy ? "Waiting for the plugin" : "Settings are not available"}</h4>
+          <h4 className="m-0 mb-xs">{busy ? t("webui.Schema.Waiting") : t("webui.Schema.Unavailable")}</h4>
           <p className="muted m-0">{error}</p>
           {busy ? (
-            <p className="muted mt-2">
-              The plugin is waiting for an answer in the terminal. This page refreshes by itself once the answer is
-              given.
-            </p>
+            <p className="muted mt-2">{t("webui.Schema.WaitingHint")}</p>
           ) : null}
-          <p className="muted mt-2">
-            Saving is disabled until the current values are loaded, so defaults do not overwrite them.
-          </p>
+          <p className="muted mt-2">{t("webui.Schema.DisabledHint")}</p>
           <button type="button" className="btn btn-default" onClick={load}>
-            Retry
+            {t("webui.Action.Retry")}
           </button>
         </div>
       ) : (
@@ -208,7 +203,7 @@ export function SchemaForm({ descriptor }) {
           </div>
           <div>
             <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? "Saving..." : "Save settings"}
+              {saving ? t("webui.Schema.Saving") : t("webui.Schema.Save")}
             </button>
           </div>
         </form>
@@ -219,13 +214,14 @@ export function SchemaForm({ descriptor }) {
 }
 
 function SchemaField({ name, prop, value, secretSet, required, onChange }) {
-  const title = prop.title || name;
-  const description = prop.description ? String(prop.description) : "";
+  const { t } = useUI();
+  const title = t(prop.title || name);
+  const description = prop.description ? t(String(prop.description)) : "";
   const inlineHint = description && description.length <= INLINE_HINT_LIMIT ? description : "";
   const titleNode = (
     <span className="field-title">
       {title}
-      {description ? <Hint text={description} label={"About " + title} /> : null}
+      {description ? <Hint text={description} label={t("webui.Schema.About") + " " + title} /> : null}
     </span>
   );
   const hint = inlineHint ? <span className="field-hint">{inlineHint}</span> : null;
@@ -236,7 +232,7 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
         {titleNode}
         <span className="check-field">
           <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
-          <span>Enabled</span>
+          <span>{t("webui.Schema.Enabled")}</span>
         </span>
         {hint}
       </label>
@@ -251,7 +247,7 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
         <select value={value == null ? "" : String(value)} onChange={(event) => onChange(event.target.value)}>
           {prop.enum.map((option, index) => (
             <option key={String(option)} value={String(option)}>
-              {String(labels[index] ?? option)}
+              {t(String(labels[index] ?? option))}
             </option>
           ))}
         </select>
@@ -300,7 +296,7 @@ function SchemaField({ name, prop, value, secretSet, required, onChange }) {
       <input
         type={prop.format === "secret" ? "password" : "text"}
         value={value == null ? "" : String(value)}
-        placeholder={prop.format === "secret" && secretSet ? "Stored - leave blank to keep" : ""}
+        placeholder={prop.format === "secret" && secretSet ? t("webui.Schema.Stored") : ""}
         required={required && !secretSet}
         onChange={(event) => onChange(event.target.value)}
       />

@@ -115,6 +115,8 @@ func buildQuestionPrompt(raw map[string]any, width int) questionPrompt {
 		p.lines = append(p.lines, "The agent asks:")
 	case question.KindPermission:
 		p.lines = append(p.lines, "Permission required:")
+	case question.KindLoop:
+		p.lines = append(p.lines, "Possible loop:")
 	}
 	if title != "" {
 		for _, line := range wrapPromptText(title, width) {

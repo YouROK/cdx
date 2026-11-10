@@ -4,5 +4,5 @@
   "version": "1.0.0",
   "description": "Builds system prompts, loads AGENTS.md from the working directory, and compacts long conversation history",
   "entry": "main.js",
-  "order": 15
+  "order": 140
 }

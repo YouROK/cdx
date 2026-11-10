@@ -135,7 +135,12 @@ function setup(cdx) {
         var summaryLines = [];
         for (var j = already; j < keepFrom; j++) {
           var m = msgs[j];
-          if (m && m.role && m.content) {
+          if (!m || !m.role) continue;
+          if (m.role === "tool") {
+            var body = String(m.content || "");
+            var status = body.indexOf("error:") === 0 ? "error: " + body.slice(7, 107) : "ok";
+            summaryLines.push("tool " + (m.name || "?") + ": " + status);
+          } else if (m.content) {
             summaryLines.push(m.role + ": " + String(m.content).slice(0, 160));
           }
         }
@@ -170,32 +175,32 @@ function setup(cdx) {
   });
 
   cdx.ui.register({
-    title: "Context & Memory",
-    description: "Controls AGENTS.md loading and conversation history compaction",
-    order: 15,
+    title: "context.Title",
+    description: "context.Description",
+    order: 140,
     config_url: "/api/plugins/context/config",
     schema: {
       type: "object",
-      title: "Context settings",
+      title: "context.Schema.Title",
       properties: {
         load_agents_md: {
           type: "boolean",
-          title: "Load AGENTS.md",
-          description: "Read AGENTS.md or CLAUDE.md from the working directory before each turn.",
+          title: "context.Schema.LoadAgentsMD",
+          description: "context.Schema.LoadAgentsMDHint",
           default: true
         },
         max_summary_chars: {
           type: "integer",
-          title: "Summary size limit",
-          description: "Characters kept from the conversation summary before older parts are dropped.",
+          title: "context.Schema.SummarySize",
+          description: "context.Schema.SummarySizeHint",
           minimum: 1000,
           maximum: 100000,
           default: 8000
         },
         max_messages: {
           type: "integer",
-          title: "Recent messages limit",
-          description: "Messages kept before older history is compacted into a summary.",
+          title: "context.Schema.RecentMessages",
+          description: "context.Schema.RecentMessagesHint",
           minimum: 4,
           maximum: 500,
           default: 40

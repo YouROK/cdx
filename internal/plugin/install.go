@@ -145,6 +145,7 @@ func (m *Manager) InstallFromZipBytes(ctx context.Context, zipBytes []byte, targ
 	if !ok {
 		return nil, fmt.Errorf("plugin %q installed but not found in state", manifest.ID)
 	}
+	m.publish(ctx, EventPluginInstalled, pluginEventPayload(info))
 	return &info, nil
 }
 

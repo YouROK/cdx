@@ -32,6 +32,9 @@ var DocCDXObject = []DocEntry{
 	{Signature: "cdx.providers.register({ listModels, complete }) / listModels()", Summary: "Register as an LLM provider; listModels returns available models, complete(req, emit) runs turns; wrap complete with cdx.inWorker to use a worker VM"},
 	{Signature: "cdx.hooks.on(hookName, priority, handler) / run(hookName, payload)", Summary: "Intercept lifecycle pipelines: session:before_turn, tool:before_call, tool:decided, tool:after_call"},
 	{Signature: "cdx.bus.publish|subscribe|handle|request(topic, payload)", Summary: "Communicate across plugins and core via events and 1-to-1 RPC"},
+	{Signature: "plugin:enabled / plugin:disabled / plugin:removed / plugin:installed / plugins:reloaded", Summary: "Core lifecycle events on the bus; payloads carry the plugin id, name, version, scope, order, directory, and state"},
+	{Signature: "cdx.bus.request(\"i18n:register\", { id: cdx.id, tables: { en: {...}, ru: {...} } })", Summary: "Register or replace the plugin translation tables; call it from setup(cdx) on the control VM and skip worker VMs with if (cdx.worker) return"},
+	{Signature: "cdx.bus.request(\"i18n:catalog\", {})", Summary: "Return the merged catalog { locale, revision, strings } for the selected language; cache it and fall back to English text when a key is missing"},
 	{Signature: "cdx.questions.ask(question)", Summary: "Ask the active client a question ({ kind, title, body, details, options, default, text }) and return { choice, text, cancelled, reason }; available in worker VMs"},
 	{Signature: "cdx.agents.run({ prompt, preset, model, max_steps })", Summary: "Run a delegated turn in a fresh child session and return { session_id, content, steps, stopped_reason, usage }; available in worker VMs, depth 1"},
 	{Signature: "cdx.agents.runMany({ prompts, preset, model, max_steps })", Summary: "Run up to 8 independent delegated turns in parallel and return { results } in input order; available in worker VMs"},
@@ -87,6 +90,7 @@ func RenderAPIDoc() string {
 		fmt.Fprintf(&sb, "- `%s` (`%s`, %s)\n", name, f.Type.Name(), reqLabel)
 	}
 
+	sb.WriteString("\nOrder bands: `0`-`99` vital, `100`-`999` built-in, `1000` and above external. A user-installed plugin below `1000` is shifted by `1000`; a missing value becomes `5000`.\n")
 	sb.WriteString("\n### The `cdx` host object\n")
 	writeDocEntries(&sb, DocCDXObject)
 

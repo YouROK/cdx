@@ -4,6 +4,6 @@
   "version": "1.0.0",
   "description": "Provides filesystem and shell execution tools to the model",
   "entry": "main.js",
-  "order": 25,
+  "order": 150,
   "workers": 8
 }

@@ -4,5 +4,5 @@
   "version": "1.0.0",
   "description": "Serves the main cdx web dashboard and renders plugin panels and JSON Schema settings",
   "entry": "main.js",
-  "order": 90
+  "order": 900
 }

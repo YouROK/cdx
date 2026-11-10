@@ -681,9 +681,9 @@ function setup(cdx) {
   });
 
   cdx.ui.register({
-    title: "Providers & Models",
-    description: "Manage LLM connections, encrypted API keys, and model configurations",
-    order: 5,
+    title: "providers.Title",
+    description: "providers.Description",
+    order: 110,
     entry: "/ui/providers/dist/panel.js",
     ui_api: 1
   });

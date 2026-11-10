@@ -362,7 +362,7 @@ func (d *Daemon) registerCoreRoutes() {
 	})
 
 	d.router.Handle("core", "DELETE", "/api/core/plugins/:id", func(c *gin.Context) {
-		if err := d.plugins.RemovePlugin(c.Param("id")); err != nil {
+		if err := d.plugins.RemovePlugin(c.Request.Context(), c.Param("id")); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -558,11 +558,10 @@ func (d *Daemon) handleIPC(ctx context.Context, method string, payload map[strin
 
 	case "plugins.remove":
 		id, _ := payload["id"].(string)
-		return map[string]any{"deleted": id}, d.plugins.RemovePlugin(id)
+		return map[string]any{"deleted": id}, d.plugins.RemovePlugin(ctx, id)
 
 	case "plugins.reload":
-		d.plugins.CloseAll()
-		if err := d.plugins.LoadDirs(ctx, d.opts.Layout.PluginDirs); err != nil {
+		if err := d.plugins.Reload(ctx); err != nil {
 			return nil, err
 		}
 		return d.plugins.ListDetailed(), nil

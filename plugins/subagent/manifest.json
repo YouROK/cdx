@@ -4,6 +4,6 @@
   "version": "1.0.0",
   "description": "Delegates a self-contained task to a child agent and returns its answer",
   "entry": "main.js",
-  "order": 35,
+  "order": 180,
   "workers": 8
 }

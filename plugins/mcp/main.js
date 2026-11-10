@@ -5,8 +5,8 @@ function setup(cdx) {
   var STATUS_KEY = "status";
   var RESULT_LIMIT = 100000;
   var DESCRIPTION_LIMIT = 800;
-  var AUTO_GATEWAY_THRESHOLD = 20;
-  var MAX_DIRECT_TOOLS = 48;
+  var AUTO_GATEWAY_THRESHOLD = 30;
+  var MAX_DIRECT_TOOLS = 64;
 
   // ---- configuration ----
 
@@ -327,39 +327,146 @@ function setup(cdx) {
     return "mcp_call";
   }
 
-  function findTools(query) {
-    var words = String(query || "").toLowerCase();
+  // normalizeName compares tool names without separators: Doc_New == doc.new.
+  function normalizeName(value) {
+    return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  }
+
+  function toolRows(serverID) {
     var list = loadServers();
-    var out = [];
+    var rows = [];
     for (var i = 0; i < list.length; i++) {
       var server = list[i];
       if (!server.enabled) continue;
+      if (serverID && server.id !== serverID) continue;
       var tools = cdx.storage.get(CATALOG_PREFIX + server.id) || [];
       for (var j = 0; j < tools.length; j++) {
         var tool = tools[j] || {};
-        var haystack = (String(tool.name || "") + " " + String(tool.description || "")).toLowerCase();
-        if (words && haystack.indexOf(words) < 0) continue;
-        out.push({ server: server.id, name: tool.name, description: String(tool.description || "").slice(0, 200) });
-        if (out.length >= 40) return { tools: out, count: out.length, truncated: true };
+        rows.push({
+          server: server.id,
+          name: String(tool.name || ""),
+          description: String(tool.description || "")
+        });
       }
     }
-    return { tools: out, count: out.length };
+    return rows;
+  }
+
+  function searchResult(rows, match) {
+    var out = [];
+    for (var i = 0; i < rows.length && out.length < 40; i++) {
+      out.push({
+        server: rows[i].server,
+        name: rows[i].name,
+        description: rows[i].description.slice(0, 200)
+      });
+    }
+    return { tools: out, count: rows.length, match: match, truncated: rows.length > out.length };
+  }
+
+  function findTools(query, serverID) {
+    var text = String(query || "").trim();
+    var lower = text.toLowerCase();
+    var normalized = normalizeName(text);
+    var rows = toolRows(serverID);
+
+    // 1. Exact name.
+    var matched = rows.filter(function (row) { return row.name.toLowerCase() === lower; });
+    if (matched.length) return searchResult(matched, "exact");
+
+    // 2. Exact name without separators.
+    if (normalized) {
+      matched = rows.filter(function (row) { return normalizeName(row.name) === normalized; });
+      if (matched.length) return searchResult(matched, "normalized");
+    }
+
+    // 3. Name prefix.
+    if (lower) {
+      matched = rows.filter(function (row) {
+        return row.name.toLowerCase().indexOf(lower) === 0 ||
+          (normalized && normalizeName(row.name).indexOf(normalized) === 0);
+      });
+      if (matched.length) return searchResult(matched, "prefix");
+    }
+
+    // 4. Words in any order, name matches weigh more than descriptions.
+    var words = lower.split(/\s+/).filter(function (word) { return normalizeName(word).length >= 2; });
+    if (!words.length) {
+      return { tools: [], count: 0, match: "none", hint: "Use mcp_list_tools to list every tool of a server." };
+    }
+    var scored = [];
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var name = normalizeName(row.name);
+      var description = normalizeName(row.description);
+      var score = 0;
+      var all = true;
+      for (var w = 0; w < words.length; w++) {
+        var word = normalizeName(words[w]);
+        var inName = name.indexOf(word) >= 0;
+        var inDescription = description.indexOf(word) >= 0;
+        if (!inName && !inDescription) {
+          all = false;
+          break;
+        }
+        score += inName ? 2 : 1;
+      }
+      if (all) scored.push({ row: row, score: score });
+    }
+    scored.sort(function (a, b) {
+      if (a.score !== b.score) return b.score - a.score;
+      return a.row.name < b.row.name ? -1 : a.row.name > b.row.name ? 1 : 0;
+    });
+    var out = [];
+    for (var k = 0; k < scored.length; k++) out.push(scored[k].row);
+    return searchResult(out, "words");
+  }
+
+  function listTools(serverID) {
+    var rows = toolRows(serverID);
+    var out = [];
+    for (var i = 0; i < rows.length && out.length < 200; i++) {
+      out.push({
+        server: rows[i].server,
+        name: rows[i].name,
+        description: rows[i].description.slice(0, 160)
+      });
+    }
+    return { tools: out, count: rows.length, truncated: rows.length > out.length };
   }
 
   function registerFindTools() {
     cdx.tools.register({
       name: "mcp_find_tools",
-      description: "Search the tools of the configured MCP servers by words in the tool name or description",
+      description: "Find a tool by name. An exact name matches first, then a name without separators, then a name prefix, and only then words in the name or description. Use mcp_list_tools to see every tool.",
       permission: "read",
       input_schema: {
         type: "object",
-        properties: { query: { type: "string", description: "Words to search for" } },
+        properties: {
+          query: { type: "string", description: "Tool name or words to search for" },
+          server: { type: "string", description: "Optional MCP server id" }
+        },
         required: ["query"]
       }
     }, cdx.inWorker(function (args) {
-      return findTools(String(args.query || ""));
+      return findTools(String(args.query || ""), String(args.server || ""));
     }));
     return "mcp_find_tools";
+  }
+
+  function registerListTools() {
+    cdx.tools.register({
+      name: "mcp_list_tools",
+      description: "List every tool of the configured MCP servers, or of one server",
+      permission: "read",
+      input_schema: {
+        type: "object",
+        properties: { server: { type: "string", description: "Optional MCP server id" } }
+      }
+    }, cdx.inWorker(function (args) {
+      return listTools(String(args.server || ""));
+    }));
+    return "mcp_list_tools";
   }
 
   function unregisterTools() {
@@ -401,7 +508,10 @@ function setup(cdx) {
       }
     }
     if (gateway.length) exposed.push(registerGateway(gateway));
-    if (visible) exposed.push(registerFindTools());
+    if (visible) {
+      exposed.push(registerFindTools());
+      exposed.push(registerListTools());
+    }
     if (visible && hasAnyResources()) exposed.push(registerResourceTools());
 
     if (!cdx.worker) cdx.storage.set(EXPOSED_KEY, exposed);
@@ -571,7 +681,8 @@ function setup(cdx) {
           revision: info.revision,
           server: info.server || {},
           tools: tools.length,
-          resources: Boolean(capabilities.resources)
+          resources: Boolean(capabilities.resources),
+          instructions: String((info.server && info.server.instructions) || "")
         };
       } catch (err) {
         status[server.id] = { connected: false, error: describeError(err) };
@@ -585,6 +696,34 @@ function setup(cdx) {
 
   function snapshot() {
     return { servers: loadServers(), status: cdx.storage.get(STATUS_KEY) || {} };
+  }
+
+  // registerInstructionsHook adds the instructions a server reports to the system prompt.
+  function registerInstructionsHook() {
+    cdx.hooks.on("session:before_turn", 12, function (payload) {
+      var status = cdx.storage.get(STATUS_KEY) || {};
+      var list = loadServers();
+      var sections = [];
+      var total = 0;
+      for (var i = 0; i < list.length; i++) {
+        var server = list[i];
+        if (!server.enabled) continue;
+        var info = status[server.id] || {};
+        var text = String(info.instructions || "").trim();
+        if (!text) continue;
+        if (text.length > 2000) text = text.slice(0, 2000) + "...";
+        var section = "### " + (server.name || server.id) + "\n" + text;
+        if (total + section.length > 6000) break;
+        total += section.length;
+        sections.push(section);
+      }
+      if (!sections.length) return payload;
+      var block = "## MCP server instructions\n\n" + sections.join("\n\n");
+      payload.system_prompt = payload.system_prompt
+        ? payload.system_prompt + "\n\n" + block
+        : block;
+      return payload;
+    });
   }
 
   // ---- HTTP API ----
@@ -723,12 +862,13 @@ function setup(cdx) {
   registerTools();
   if (cdx.worker) return;
 
+  registerInstructionsHook();
   registerRoutes();
   cdx.http.static("/ui/mcp", "./web");
   cdx.ui.register({
-    title: "MCP Servers",
-    description: "Connect to Model Context Protocol servers and expose their tools to the model",
-    order: 45,
+    title: "mcp.Title",
+    description: "mcp.Description",
+    order: 170,
     entry: "/ui/mcp/dist/panel.js",
     ui_api: 1
   });

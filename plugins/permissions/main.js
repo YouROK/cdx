@@ -62,20 +62,46 @@ function setup(cdx) {
     }
   }
 
+  // Translation lookup for questions sent to the client. Falls back to English.
+  function translator() {
+    var dict = {};
+    try {
+      var catalog = cdx.bus.request("i18n:catalog", {});
+      if (catalog && catalog.strings) dict = catalog.strings;
+    } catch (e) {
+      // i18n is unavailable; the English fallbacks stay.
+    }
+    return function t(key, fallback, vars) {
+      var text = Object.prototype.hasOwnProperty.call(dict, key) ? dict[key] : (fallback || key);
+      if (vars && typeof text === "string") {
+        text = text.replace(/\{(\w+)\}/g, function (match, name) {
+          return vars[name] === undefined || vars[name] === null ? match : String(vars[name]);
+        });
+      }
+      return text;
+    };
+  }
+
   // Human-readable name of the action behind a tool.
-  function toolTitle(tool) {
-    if (tool === "shell") return "Run a shell command";
-    if (tool === "write_file") return "Write a file";
-    if (tool === "edit_file") return "Edit a file";
-    if (tool === "read_file") return "Read a file";
-    if (tool === "list_dir") return "List a folder";
-    if (tool === "grep") return "Search file contents";
-    if (tool === "glob") return "Find files";
-    return "Use the tool " + tool;
+  function toolTitle(tool, t) {
+    if (tool === "shell") return t("permissions.ToolShell", "Run a shell command");
+    if (tool === "write_file") return t("permissions.ToolWrite", "Write a file");
+    if (tool === "edit_file") return t("permissions.ToolEdit", "Edit a file");
+    if (tool === "read_file") return t("permissions.ToolRead", "Read a file");
+    if (tool === "list_dir") return t("permissions.ToolList", "List a folder");
+    if (tool === "grep") return t("permissions.ToolGrep", "Search file contents");
+    if (tool === "glob") return t("permissions.ToolGlob", "Find files");
+    return t("permissions.ToolUse", "Use the tool {tool}", { tool: tool });
+  }
+
+  function permissionLabel(level, t) {
+    if (level === "read") return t("permissions.LevelRead", "read");
+    if (level === "dangerous") return t("permissions.LevelDangerous", "dangerous");
+    return t("permissions.LevelEdit", "edit");
   }
 
   // Labelled lines shown in the prompt: the full command, the file path, and so on.
-  function toolDetails(tool, args) {
+  function toolDetails(tool, args, t) {
     var details = [];
     function add(label, value) {
       if (value === undefined || value === null) return;
@@ -85,23 +111,23 @@ function setup(cdx) {
     }
     args = args || {};
     if (tool === "shell") {
-      add("Command", args.command);
+      add(t("permissions.DetailCommand", "Command"), args.command);
     } else if (tool === "write_file" || tool === "edit_file") {
-      add("File", args.path || args.file);
+      add(t("permissions.DetailFile", "File"), args.path || args.file);
       if (tool === "write_file" && typeof args.content === "string") {
-        add("Content", args.content.length + " characters");
+        add(t("permissions.DetailContent", "Content"), t("permissions.Characters", "{count} characters", { count: args.content.length }));
       }
     } else if (tool === "read_file") {
-      add("File", args.path || args.file);
+      add(t("permissions.DetailFile", "File"), args.path || args.file);
     } else if (tool === "list_dir") {
-      add("Folder", args.path || args.dir);
+      add(t("permissions.DetailFolder", "Folder"), args.path || args.dir);
     } else if (tool === "grep" || tool === "glob") {
-      add("Pattern", args.pattern || args.query || args.glob);
-      add("Folder", args.path);
+      add(t("permissions.DetailPattern", "Pattern"), args.pattern || args.query || args.glob);
+      add(t("permissions.DetailFolder", "Folder"), args.path);
     }
     if (details.length === 0) {
       try {
-        add("Arguments", JSON.stringify(args));
+        add(t("permissions.DetailArguments", "Arguments"), JSON.stringify(args));
       } catch (e) {
         // Arguments that cannot be serialized stay out of the prompt.
       }
@@ -201,23 +227,23 @@ function setup(cdx) {
     return payload;
   }
 
-  function askOutsideWorkspace(tool, payload, outside) {
+  function askOutsideWorkspace(tool, payload, outside, t) {
     var workdir = payload.workdir || "";
-    var details = toolDetails(tool, payload.arguments || {});
-    details.push({ label: "Permission", value: payload.permission || "edit" });
-    if (workdir) details.push({ label: "Working folder", value: workdir });
+    var details = toolDetails(tool, payload.arguments || {}, t);
+    details.push({ label: t("permissions.DetailPermission", "Permission"), value: permissionLabel(payload.permission || "edit", t) });
+    if (workdir) details.push({ label: t("permissions.DetailWorkingFolder", "Working folder"), value: workdir });
     for (var i = 0; i < outside.length; i++) {
-      details.push({ label: i === 0 ? "Outside" : "", value: outside[i] });
+      details.push({ label: i === 0 ? t("permissions.DetailOutside", "Outside") : "", value: outside[i] });
     }
     return askPolicy(payload, {
       kind: "permission",
       tag: "permissions",
-      title: toolTitle(tool) + " outside the working folder",
-      body: "The action leaves the working folder.",
+      title: t("permissions.OutsideTitle", "{action} outside the working folder", { action: toolTitle(tool, t) }),
+      body: t("permissions.OutsideBody", "The action leaves the working folder."),
       details: details,
       options: [
-        { id: "once", label: "Allow once" },
-        { id: "deny", label: "Deny" }
+        { id: "once", label: t("permissions.AllowOnce", "Allow once") },
+        { id: "deny", label: t("permissions.Deny", "Deny") }
       ],
       default: "once"
     });
@@ -250,7 +276,7 @@ function setup(cdx) {
         throw new Error("permission denied by policy: the action is outside the working folder: " + buildSummary(tool, args));
       }
       if (outsidePolicy !== "allow") {
-        return askOutsideWorkspace(tool, payload, outside);
+        return askOutsideWorkspace(tool, payload, outside, translator());
       }
     }
 
@@ -258,20 +284,21 @@ function setup(cdx) {
       return payload;
     }
 
-    var details = toolDetails(tool, args);
-    details.push({ label: "Permission", value: level });
+    var t = translator();
+    var details = toolDetails(tool, args, t);
+    details.push({ label: t("permissions.DetailPermission", "Permission"), value: permissionLabel(level, t) });
     return askPolicy(payload, {
       kind: "permission",
       tag: "permissions",
-      title: toolTitle(tool),
+      title: toolTitle(tool, t),
       body: buildSummary(tool, args),
       details: details,
       options: [
-        { id: "once", label: "Allow once" },
-        { id: "session", label: "Allow for this session" },
-        { id: "daemon", label: "Allow for this daemon run" },
-        { id: "always", label: "Always allow" },
-        { id: "deny", label: "Deny" }
+        { id: "once", label: t("permissions.AllowOnce", "Allow once") },
+        { id: "session", label: t("permissions.AllowSession", "Allow for this session") },
+        { id: "daemon", label: t("permissions.AllowDaemon", "Allow for this daemon run") },
+        { id: "always", label: t("permissions.AlwaysAllow", "Always allow") },
+        { id: "deny", label: t("permissions.Deny", "Deny") }
       ],
       default: "once"
     });
@@ -356,9 +383,9 @@ function setup(cdx) {
   cdx.http.static("/ui/permissions", "./web");
 
   cdx.ui.register({
-    title: "Permissions",
-    description: "Control how read, edit, and dangerous tools are approved",
-    order: 20,
+    title: "permissions.Title",
+    description: "permissions.Description",
+    order: 130,
     entry: "/ui/permissions/dist/panel.js"
   });
 }
