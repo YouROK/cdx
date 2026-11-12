@@ -2,7 +2,11 @@
 
 `cdx` acts as an **MCP host**: it connects to external MCP servers, discovers their tools, and lets
 the model call them. The feature is owned by the `mcp` plugin. The core provides the transport and
-JSON-RPC machinery, because a plugin cannot hold a live connection across its worker VMs.
+JSON-RPC machinery, because a plugin cannot own the connection lifecycle itself.
+
+This document covers the client direction only: `cdx` consumes tools from other MCP servers. The
+opposite direction, where another agent uses `cdx` as an MCP server, is described in
+[`MCP-SERVER.md`](MCP-SERVER.md).
 
 ---
 
@@ -67,8 +71,9 @@ plugins/mcp (JS)                 internal/mcp (Go)                external
 
 * `internal/mcp` owns framing, request correlation, timeouts, cancellation, process lifetime, and
   protocol-era detection.
-* `cdx.mcp` exposes the client to plugins and **works in worker VMs**, like `cdx.questions` and
-  `cdx.agents`. Tool handlers therefore run in workers and never block the plugin control VM.
+* `cdx.mcp` exposes the client to plugins and returns promises for blocking calls, like
+  `cdx.questions` and `cdx.agents`. A tool handler therefore waits at `await` while the plugin VM
+  keeps serving other work.
 * `plugins/mcp` owns configuration, secrets, discovery policy, tool naming, permission mapping, and
   the settings page. It registers tools and forwards calls.
 
@@ -292,7 +297,7 @@ in the initialization metadata.
 
 ## 11. Out of scope
 
-* `cdx` as an MCP server for other agents. That is a separate plugin and a separate transport
-  question, and it is not needed to use MCP tools.
+* `cdx` as an MCP server for other agents. That is a separate plugin with its own transport and
+  security model, described in [`MCP-SERVER.md`](MCP-SERVER.md).
 * Importing servers from a URL or the public registry. The first version imports a local
   `mcp.json` (Claude Desktop and Cursor format) and lets the user review the commands.

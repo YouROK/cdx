@@ -73,6 +73,8 @@ func TestLiveBeamFreeModelAndTools(t *testing.T) {
 	if apiKey == "" {
 		t.Skip("CDX_LIVE_API_KEY is not set")
 	}
+	baseURL := envValue("CDX_LIVE_BASE_URL", "https://opencode.ai/zen/go/v1")
+	model := envValue("CDX_LIVE_MODEL", "beam-free")
 
 	tmp := t.TempDir()
 	layout := paths.ResolveWithHome(tmp, func(string) string { return "" })
@@ -90,19 +92,25 @@ func TestLiveBeamFreeModelAndTools(t *testing.T) {
 	}
 	defer d.Stop()
 
-	baseURL := "http://" + d.HTTPAddr()
-	token := pageToken(t, baseURL)
+	baseURLHTTP := "http://" + d.HTTPAddr()
+	token := pageToken(t, baseURLHTTP)
 
 	// 1. Configure opencode-go provider with the encrypted API key via the providers plugin HTTP API.
-	provBody := `{"name":"opencode-go","protocol":"openai-chat","base_url":"https://opencode.ai/zen/go/v1","api_key":"` + apiKey + `"}`
-	if status, body := apiPost(t, baseURL+"/api/plugins/providers/providers", token, provBody); status != http.StatusOK {
+	provBody := `{"name":"opencode-go","protocol":"openai-chat","base_url":` + quoteJSON(baseURL) + `,"api_key":` + quoteJSON(apiKey) + `}`
+	if status, body := apiPost(t, baseURLHTTP+"/api/plugins/providers/providers", token, provBody); status != http.StatusOK {
 		t.Fatalf("failed to configure provider: status=%d body=%s", status, body)
 	}
 
-	// 2. Configure beam-free model via the providers plugin HTTP API.
-	modelBody := `{"provider":"opencode-go","name":"beam-free","remote":"beam-free","context_window":128000,"max_tokens":1024,"temperature":0.2,"default":true}`
-	if status, body := apiPost(t, baseURL+"/api/plugins/providers/models", token, modelBody); status != http.StatusOK {
+	// 2. Configure the model via the providers plugin HTTP API.
+	modelBody := `{"provider":"opencode-go","name":"beam-free","remote":` + quoteJSON(model) + `,"context_window":128000,"max_tokens":1024,"temperature":0.2,"default":true}`
+	if status, body := apiPost(t, baseURLHTTP+"/api/plugins/providers/models", token, modelBody); status != http.StatusOK {
 		t.Fatalf("failed to configure model: status=%d body=%s", status, body)
+	}
+
+	// The test runs non-interactively, so permissions must not ask.
+	permBody := `{"read_policy":"allow","edit_policy":"allow","dangerous_policy":"allow","outside_policy":"allow"}`
+	if status, body := apiPost(t, baseURLHTTP+"/api/plugins/permissions/config", token, permBody); status != http.StatusOK {
+		t.Fatalf("failed to configure permissions: status=%d body=%s", status, body)
 	}
 
 	// 3. Create a test file on disk for the read_file tool to read.

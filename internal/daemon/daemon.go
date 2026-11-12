@@ -125,6 +125,7 @@ type Daemon struct {
 	registry *plugin.Registry
 	plugins  *plugin.Manager
 	sessions *session.Orchestrator
+	tasks    *taskManager
 	mcp      *mcp.Manager
 	ipcSrv   *ipc.Server
 	httpSrv  *http.Server
@@ -167,14 +168,19 @@ func New(ctx context.Context, opts Options) (*Daemon, error) {
 	sessOrch := session.NewOrchestrator(st, eb, reg, opts.Logger)
 
 	mcpManager := mcp.NewManager()
+	tasks := newTaskManager(sessOrch, reg, logScope)
 	pm := plugin.NewManager(plugin.RuntimeDependencies{
-		Store:    st,
-		Bus:      eb,
-		Router:   rt,
-		Registry: reg,
-		Logger:   opts.Logger,
-		Agents:   agentRunner{sessions: sessOrch},
-		MCP:      mcpManager,
+		Store:     st,
+		Bus:       eb,
+		Router:    rt,
+		Registry:  reg,
+		Logger:    opts.Logger,
+		Agents:    agentRunner{sessions: sessOrch},
+		Tools:     sessOrch,
+		Tasks:     tasks,
+		MCP:       mcpManager,
+		Async:     plugin.NewAsyncLimiter(64),
+		AsyncExec: plugin.NewAsyncLimiter(8),
 	})
 
 	d := &Daemon{
@@ -186,6 +192,7 @@ func New(ctx context.Context, opts Options) (*Daemon, error) {
 		registry: reg,
 		plugins:  pm,
 		sessions: sessOrch,
+		tasks:    tasks,
 		mcp:      mcpManager,
 		stopCh:   make(chan struct{}),
 	}
@@ -258,6 +265,9 @@ func (d *Daemon) Stop() {
 		}
 		if d.ipcSrv != nil {
 			_ = d.ipcSrv.Close()
+		}
+		if d.tasks != nil {
+			d.tasks.CancelAll()
 		}
 		if d.plugins != nil {
 			d.plugins.CloseAll()

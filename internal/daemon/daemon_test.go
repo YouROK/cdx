@@ -98,8 +98,8 @@ func TestDefaultPluginsAndWebUI(t *testing.T) {
 	_ = json.NewDecoder(statusResp.Body).Decode(&statusData)
 	statusResp.Body.Close()
 
-	if len(statusData.Plugins) != 11 {
-		t.Fatalf("expected 11 default plugins loaded, got %d: %+v", len(statusData.Plugins), statusData.Plugins)
+	if len(statusData.Plugins) != 12 {
+		t.Fatalf("expected 12 default plugins loaded, got %d: %+v", len(statusData.Plugins), statusData.Plugins)
 	}
 	if len(statusData.Tools) != 7 {
 		t.Fatalf("expected 7 tools registered, got %d: %+v", len(statusData.Tools), statusData.Tools)

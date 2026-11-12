@@ -4,6 +4,5 @@
   "version": "1.0.0",
   "description": "Lets the model ask the user a question with optional choices",
   "entry": "main.js",
-  "order": 160,
-  "workers": 4
+  "order": 160
 }

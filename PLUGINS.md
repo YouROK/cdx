@@ -31,8 +31,7 @@ Every plugin lives in its own directory (either inside `plugins/<id>` in the rep
   "author": "your-name",
   "homepage": "https://example.com/my-plugin",
   "entry": "main.js",
-  "order": 50,
-  "workers": 2
+  "order": 50
 }
 ```
 
@@ -42,7 +41,6 @@ Every plugin lives in its own directory (either inside `plugins/<id>` in the rep
 * `min_cdx_version` (optional): minimum compatible `cdx` version checked before `.zip` installation.
 * `entry`: relative path to the JavaScript entry file inside the plugin directory (default: `"main.js"`).
 * `order` (optional): load priority in three bands. `0`-`99` is vital, `100`-`999` built-in, `1000` and above external. `i18n` uses `0`, the built-in plugins use `100`-`999`, and an external plugin with a value below `1000` is shifted by `1000` (for example `101` becomes `1101`). A missing or zero `order` becomes `5000` for a user-installed plugin. The shift applies when the user and system plugin directories are separate; a single custom directory keeps the manifest values. The value also sets the default web panel position, and an explicit `order` passed to `cdx.ui.register` goes through the same shift, so an external panel stays after the built-in pages.
-* `workers` (optional, default `0`): number of isolated worker VMs (0-16). Only functions explicitly wrapped with `cdx.inWorker(fn)` are dispatched there. Worker VMs run in separate Go goroutines, so the control VM stays responsive for HTTP routes, hooks, status, and UI. The plugin's `setup(cdx)` runs once per worker; keep it idempotent and store shared mutable state in `cdx.storage`/`cdx.secrets`. Inside a worker, `cdx.worker` is `true`, while control-plane APIs (`cdx.http`, `cdx.hooks`, `cdx.ui`, `cdx.bus`) are disabled.
 
 ---
 
@@ -56,6 +54,39 @@ function setup(cdx) {
 }
 ```
 
+`setup(cdx)` runs once and must be synchronous. Start background work with an async function and catch its errors:
+
+```js
+(async function () {
+  try {
+    const status = await cdx.mcp.status("server");
+    cdx.storage.set("status", status);
+  } catch (e) {
+    cdx.log.error("status refresh failed: " + e);
+  }
+})();
+```
+
+### Async handlers and blocking calls
+
+A handler may be synchronous or `async`. When a plugin function returns a promise, the core waits for it on the caller side, outside the plugin VM, so other routes, hooks, and tool calls keep running while the handler waits.
+
+* Blocking host calls return promises: `cdx.sys.fetch`, `cdx.sys.exec`, `cdx.questions.ask`, `cdx.agents.run`/`runMany`, `cdx.mcp.connect`/`call`/`listTools`/`listResources`/`readResource`/`close`, and `cdx.tools.call`. Await them.
+* Local calls stay synchronous: `cdx.storage`, `cdx.secrets`, `cdx.log`, `cdx.bus`, `cdx.hooks`, `cdx.sys.readFile`/`writeFile`/`stat`/`readDir`/`random`/`env`, registration APIs, and `cdx.after`.
+* `await cdx.yield()` returns control to the plugin event loop; use it to split a long CPU loop. `await cdx.sleep(ms)` waits without blocking the VM.
+* The core bounds concurrent external calls (64) and shell processes (8). A call that finds every slot busy waits for one instead of failing.
+* A synchronous CPU-bound section still blocks the VM. `async` does not make it parallel; true parallel JS would need a separate VM, which cdx does not provide.
+* Async handlers may run interleaved at `await` points. Keep shared state in `cdx.storage` when the order matters.
+* The core logs unhandled promise rejections. Use `try/catch` or `.catch`.
+
+```js
+cdx.tools.register(spec, async function (args) {
+  const res = await cdx.sys.fetch(url);
+  const out = await cdx.sys.exec(command);
+  return out.stdout;
+});
+```
+
 ---
 
 ## 4. The `cdx` Host API
@@ -63,10 +94,10 @@ function setup(cdx) {
 ### 4.1. Identity & Live Reference
 * `cdx.id` (string) - the plugin's ID from `manifest.json`.
 * `cdx.dir` (string) - absolute path to the plugin's directory on disk.
-* `cdx.worker` (boolean) - `true` inside an isolated worker VM started for `workers > 0`.
 * `cdx.workdir()` (string) - the active session working directory. Tool handlers should resolve relative paths and the default shell directory against it.
-* `cdx.inWorker(fn)` - marks a provider `complete` handler or tool handler for execution in a worker VM. Without the marker the function runs in the control VM.
-* `cdx.after(ms, fn)` - runs a callback on the control VM after a delay; returns `false` in worker VMs. Use it to refresh a catalog after `setup` instead of blocking startup.
+* `cdx.after(ms, fn)` - runs a callback after a delay; the callback may be async.
+* `cdx.yield()` - returns a promise resolved on the next event-loop turn; await it to split long work.
+* `cdx.sleep(ms)` - returns a promise resolved after the delay; await it without blocking the VM.
 * `cdx.apiDoc()` (string) - returns the live Markdown Plugin API Reference generated directly from the Go host definitions.
 
 ### 4.2. Logging (`cdx.log`)
@@ -107,19 +138,26 @@ Isolated per-plugin **AES-256-GCM** encrypted bucket (`plugin_secrets:<id>`) in 
       },
       required: ["title"]
     }
-  }, cdx.inWorker(function(args) {
-    return { content: cdx.storage.get("note:" + args.title) };
-  }));
+  }, async function(args) {
+    return { content: await cdx.sys.readFile(notePath(args.title)) };
+  });
   ```
 
-  Wrap the handler with `cdx.inWorker(...)` to run it in a worker VM when `workers > 0`. The handler and `state` must not rely on mutable JS variables from the control VM; use `cdx.storage`/`cdx.secrets` for shared state. Relative filesystem paths and the default shell directory should be resolved against `cdx.workdir()`.
-* `cdx.tools.remove(name)` -> removes a registered tool by name and returns whether it existed; a no-op in worker VMs. Use it when a dynamic catalog changes.
+  The handler may be sync or async. It shares the plugin VM with every other handler, so keep shared state in `cdx.storage`/`cdx.secrets` and resolve relative filesystem paths against `cdx.workdir()`.
+* `cdx.tools.remove(name)` -> removes a registered tool by name and returns whether it existed. Use it when a dynamic catalog changes.
 * `cdx.tools.list()` -> returns all registered tool specifications.
+* `cdx.tools.call(name, args, opts)` -> runs a registered tool through the core pipeline:
+  the `tool:before_call` hook, the approval question, the handler, and `tool:after_call`.
+  Returns a promise for `{ output, error }`, where `output` is the formatted text the model would see and
+  `error` carries a denial or a handler failure. Await it. `opts` may set `session_id`,
+  `root_session_id`, `workdir`, and `depth`; without a session the call is attributed to
+  `plugin:<id>`. Use it when a tool must run outside the turn loop, for example when serving
+  tools to another agent.
 
 ### 4.6. LLM Providers (`cdx.providers`)
 * `cdx.providers.register({ listModels, complete })`:
   * `listModels()`: returns array of `{ id, name, provider, default, context_window }`.
-  * `complete(req, emit)`: executes a completion turn for `req.model`, calling `emit({ type: "text"|"reasoning", delta: "..." })` for live streaming and returning `{ content, reasoning, tool_calls, usage }`. Wrap it as `complete: cdx.inWorker(complete)` to run it in a worker VM when `workers > 0`.
+  * `complete(req, emit)`: executes a completion turn for `req.model`, calling `emit({ type: "text"|"reasoning", delta: "..." })` for live streaming and returning `{ content, reasoning, tool_calls, usage }`. It may be `async` and await `cdx.sys.fetch`; the core waits for the returned promise while the VM keeps serving other work.
 
 ### 4.7. Lifecycle Hooks (`cdx.hooks`)
 * `cdx.hooks.on(hookName, priority, handler)`:
@@ -292,34 +330,32 @@ The legacy `window.CDXPluginPanels` registry is not used. New page panels are ES
 * `cdx.plugins.remove(id)`
 
 ### 4.12. System Capabilities (`cdx.sys`)
-* `cdx.sys.readFile(path)` / `cdx.sys.writeFile(path, content)` / `cdx.sys.stat(path)` / `cdx.sys.readDir(path)`
+* `cdx.sys.readFile(path)` / `cdx.sys.writeFile(path, content)` / `cdx.sys.stat(path)` / `cdx.sys.readDir(path)` - synchronous local file I/O
 * `cdx.sys.random(n)` - returns `n` cryptographically random bytes as a hex string (1-64), for tokens and nonces
 * `cdx.sys.env(name)` - returns the value of an environment variable of the daemon process
-* `cdx.sys.exec(command, workdir, timeoutMS)`
-* `cdx.sys.fetch(url, options, onLineCallback)`
+* `cdx.sys.exec(command, workdir, timeoutMS)` - returns a promise for `{ stdout, stderr, exit_code }`; await it
+* `cdx.sys.fetch(url, options, onLineCallback)` - returns a promise for the response; `onLineCallback` receives each streamed line on the plugin VM
 
 ### 4.13. Client Questions (`cdx.questions`)
-* `cdx.questions.ask(question)` -> `{ choice, text, cancelled, reason }`.
-  * The core routes the question to the client of the running turn and waits for the answer. Without an interactive client the answer is cancelled with a reason.
+* `cdx.questions.ask(question)` -> promise for `{ choice, text, cancelled, reason }`.
+  * The core routes the question to the client of the running turn and waits for the answer. Without an interactive client the answer is cancelled with a reason. Await the promise from an async handler or hook.
   * `question` is an envelope: `kind` (rendering hint such as `model` or `permission`), `title` (required), `body`, `details` (`[{ label, value }]`), `options` (`[{ id, label, description }]`), `default` (an option id), `text` (allow a free-text answer), and `tag` (asker identity: the host stamps it for `cdx.questions.ask`, a hook sets it for its own questions).
   * The host sets `source` to `plugin:<id>`; a plugin cannot claim to be the core.
-  * Unlike `cdx.bus`, `cdx.questions` also works inside worker VMs, so tools marked with `cdx.inWorker` can ask the user.
   * When options are present the client resolves a default (the given one, otherwise the first option), so Enter accepts it. An unrecognized answer repeats the question until it matches an option or the free text; `y`/`n` work in any case. Free text without an option cancels on an empty line, and non-interactive clients answer `cancelled` without showing the question.
   * Validation rejects an empty title, duplicate option ids, a default that is not an option, more than 20 options or details, and a question with neither options nor free text.
 
 ### 4.14. Subagents (`cdx.agents`)
-* `cdx.agents.run({ prompt, preset?, model?, max_steps? })` -> `{ session_id, content, steps, stopped_reason, usage }`.
+* `cdx.agents.run({ prompt, preset?, model?, max_steps? })` -> promise for `{ session_id, content, steps, stopped_reason, usage }`.
   * Runs a delegated turn in a fresh child session and waits for its result. The child does not see the current conversation, so `prompt` must be a self-contained brief: goal, relevant files, constraints, and the expected result.
   * The child shares the working directory and tools, inherits the parent's preset and model unless overridden, and never becomes the active session for the directory.
   * Depth is capped at `1`: a child cannot start another child. Stateless runs (`--no-session`) cannot delegate.
-  * Works in worker VMs, like `cdx.questions`. The question broker is shared, so a child can ask the same client.
-* `cdx.agents.runMany({ prompts, preset?, model?, max_steps? })` -> `{ results: [...] }`.
+* `cdx.agents.runMany({ prompts, preset?, model?, max_steps? })` -> promise for `{ results: [...] }`.
   * Runs up to `8` independent child turns in parallel and returns their results in the input order. Each result has the same fields as `run`, plus `error` for a failed child.
   * The default `subagent` tool uses this with its `tasks` array; a single `prompt` stays one child. Separate tool calls remain sequential, so use `tasks` for real parallelism.
 
 ### 4.15. MCP Servers (`cdx.mcp`)
 
-`cdx.mcp` connects to [Model Context Protocol](https://modelcontextprotocol.io) servers and exposes their tools. It works in worker VMs, like `cdx.questions` and `cdx.agents`: a connection opened by any VM is shared, and the plugin closes it when it is unloaded.
+`cdx.mcp` connects to [Model Context Protocol](https://modelcontextprotocol.io) servers and exposes their tools. A connection opened by the plugin is shared by all of its handlers, and the plugin closes it when it is unloaded. The blocking calls return promises; await them from an async handler.
 
 * `cdx.mcp.connect(config)` -> `{ id, connected, revision, server, tools }`:
   * `id` - server id, required; also the key of the shared connection.
@@ -339,11 +375,27 @@ The legacy `window.CDXPluginPanels` registry is not used. New page panels are ES
 
 The core answers the server requests a connection needs: `roots/list` returns the turn working directory, and `elicitation/create` is asked through `cdx.questions` (one question per requested field). Servers are dual-era: revision `2026-07-28` uses per-request metadata and `server/discover`, older servers keep the `initialize` handshake.
 
-### 4.16. Interface Language (`i18n`)
+### 4.16. Background Tasks (`cdx.tasks`)
+A background turn outlives the call that started it: it is meant for a plugin that serves another
+agent and cannot hold a request open for minutes.
+* `cdx.tasks.start({ prompt, workdir, preset, model, max_steps, timeout_s, allowed_tools, owner })`
+  -> `{ task_id, session_id }`. The turn runs in a new session of kind `task` with `origin` set to
+  `owner`; `allowed_tools` limits the tools offered to it, and the step limit is forced to `stop`.
+  Without a model the call throws.
+* `cdx.tasks.get(id)` -> `{ found, task_id, session_id, status, result, stopped_reason, error, question }`,
+  where `status` is `running`, `needs_input`, `finished`, `failed`, or `cancelled`, and `question`
+  is `{ id, kind, title, body }` while the turn waits for an answer.
+* `cdx.tasks.list()` -> every task the daemon still knows.
+* `cdx.tasks.answer(id, question_id, answer)` -> `{ ok, error }`. `answer` uses the usual question
+  fields (`choice`, `text`, `cancelled`); `always`, `daemon`, and `session` are downgraded to
+  `once`, so a remote answer never creates a persistent grant.
+* `cdx.tasks.cancel(id)` -> `{ ok, error }`; cancelling a finished task does nothing.
+
+### 4.17. Interface Language (`i18n`)
 
 The `i18n` plugin merges flat translation tables from all plugins and serves the catalog for the selected language. It loads first (`order: 0`) and keeps its own English base catalog.
 
-* `cdx.bus.request("i18n:register", { id: cdx.id, tables: { en: {...}, ru: {...} } })` - replaces the plugin's tables for every language. Call it from `setup(cdx)` on the control VM; worker VMs must skip it with `if (cdx.worker) return;`.
+* `cdx.bus.request("i18n:register", { id: cdx.id, tables: { en: {...}, ru: {...} } })` - replaces the plugin's tables for every language. Call it once from `setup(cdx)`.
 * `cdx.bus.request("i18n:catalog", {})` -> `{ locale, revision, strings }` - the merged catalog for the selected language. Fetch it once per VM, cache it, and resolve a string with `strings[key] ?? key`.
 * Tables are flat `key -> text` maps. Recommend `<plugin-id>.<Group>.<Name>` keys, for example `providers.Form.ApiKey`. The catalog always contains the merged `en` layer, so a key missing in the selected language falls back to English and then to the key itself.
 * Layers are ordered by plugin `order`, and a later layer wins on the same key. A translation pack is an ordinary plugin that registers tables for other namespaces, so an external plugin can cover built-in strings without editing them.

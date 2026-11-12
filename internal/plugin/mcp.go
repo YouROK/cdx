@@ -18,11 +18,11 @@ import (
 	"github.com/yourok/cdx/internal/question"
 )
 
-// buildMCPObject exposes the MCP connections of the plugin, including worker VMs.
+// buildMCPObject exposes the MCP connections of the plugin.
 func (rt *Runtime) buildMCPObject(vm *goja.Runtime) *goja.Object {
 	obj := vm.NewObject()
 
-	_ = obj.Set("connect", func(raw map[string]any) map[string]any {
+	_ = obj.Set("connect", func(raw map[string]any) goja.Value {
 		manager := rt.deps.MCP
 		if manager == nil {
 			panic(vm.NewGoError(errors.New("mcp is not available")))
@@ -34,63 +34,70 @@ func (rt *Runtime) buildMCPObject(vm *goja.Runtime) *goja.Object {
 		if cfg.Logger == nil {
 			cfg.Logger = rt.deps.Logger
 		}
-		ctx := rt.currentCtx()
-		workdir := WorkdirFromContext(ctx)
-		if cfg.Dir == "" {
-			cfg.Dir = workdir
-		}
-		if cfg.Root == "" {
-			cfg.Root = workdir
-		}
-
-		client, err := manager.Connect(ctx, rt.owner, cfg)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		client.SetInputHandler(rt.answerMCPInput)
-		tools, err := client.ListTools(ctx)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return map[string]any{
-			"id":        cfg.ID,
-			"connected": true,
-			"revision":  client.Revision(),
-			"server":    mcpServerInfo(client.Info()),
-			"tools":     tools,
-		}
+		return rt.async(vm, rt.deps.Async, func(ctx context.Context) (any, error) {
+			workdir := WorkdirFromContext(ctx)
+			if cfg.Dir == "" {
+				cfg.Dir = workdir
+			}
+			if cfg.Root == "" {
+				cfg.Root = workdir
+			}
+			client, connectErr := manager.Connect(ctx, rt.owner, cfg)
+			if connectErr != nil {
+				return nil, connectErr
+			}
+			client.SetInputHandler(rt.answerMCPInput)
+			tools, listErr := client.ListTools(ctx)
+			if listErr != nil {
+				return nil, listErr
+			}
+			return map[string]any{
+				"id":        cfg.ID,
+				"connected": true,
+				"revision":  client.Revision(),
+				"server":    mcpServerInfo(client.Info()),
+				"tools":     tools,
+			}, nil
+		})
 	})
 
-	_ = obj.Set("call", func(serverID, tool string, args map[string]any) map[string]any {
-		client, ok := rt.mcpClient(serverID)
-		if !ok {
-			panic(vm.NewGoError(fmt.Errorf("mcp: server %q is not connected", serverID)))
-		}
-		res, err := client.CallTool(rt.currentCtx(), tool, args)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		data, err := json.Marshal(res)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		var out map[string]any
-		if err := json.Unmarshal(data, &out); err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return out
+	_ = obj.Set("call", func(serverID, tool string, args map[string]any) goja.Value {
+		return rt.async(vm, rt.deps.Async, func(ctx context.Context) (any, error) {
+			client, ok := rt.mcpClient(serverID)
+			if !ok {
+				return nil, fmt.Errorf("mcp: server %q is not connected", serverID)
+			}
+			res, err := client.CallTool(ctx, tool, args)
+			if err != nil {
+				return nil, err
+			}
+			data, err := json.Marshal(res)
+			if err != nil {
+				return nil, err
+			}
+			var out map[string]any
+			if err := json.Unmarshal(data, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		})
 	})
 
-	_ = obj.Set("listTools", func(serverID string) []mcp.Tool {
-		client, ok := rt.mcpClient(serverID)
-		if !ok {
-			return nil
-		}
-		tools, err := client.ListTools(rt.currentCtx())
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return tools
+	_ = obj.Set("listTools", func(serverID string) goja.Value {
+		return rt.async(vm, rt.deps.Async, func(ctx context.Context) (any, error) {
+			client, ok := rt.mcpClient(serverID)
+			if !ok {
+				return []mcp.Tool{}, nil
+			}
+			tools, err := client.ListTools(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if tools == nil {
+				return []mcp.Tool{}, nil
+			}
+			return tools, nil
+		})
 	})
 
 	_ = obj.Set("status", func(serverID string) map[string]any {
@@ -106,39 +113,43 @@ func (rt *Runtime) buildMCPObject(vm *goja.Runtime) *goja.Object {
 		}
 	})
 
-	_ = obj.Set("listResources", func(serverID string) []mcp.Resource {
-		client, ok := rt.mcpClient(serverID)
-		if !ok {
-			return []mcp.Resource{}
-		}
-		resources, err := client.ListResources(rt.currentCtx())
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		if resources == nil {
-			return []mcp.Resource{}
-		}
-		return resources
+	_ = obj.Set("listResources", func(serverID string) goja.Value {
+		return rt.async(vm, rt.deps.Async, func(ctx context.Context) (any, error) {
+			client, ok := rt.mcpClient(serverID)
+			if !ok {
+				return []mcp.Resource{}, nil
+			}
+			resources, err := client.ListResources(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if resources == nil {
+				return []mcp.Resource{}, nil
+			}
+			return resources, nil
+		})
 	})
 
-	_ = obj.Set("readResource", func(serverID, uri string) map[string]any {
-		client, ok := rt.mcpClient(serverID)
-		if !ok {
-			panic(vm.NewGoError(fmt.Errorf("mcp: server %q is not connected", serverID)))
-		}
-		res, err := client.ReadResource(rt.currentCtx(), uri)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		data, err := json.Marshal(res)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		var out map[string]any
-		if err := json.Unmarshal(data, &out); err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return out
+	_ = obj.Set("readResource", func(serverID, uri string) goja.Value {
+		return rt.async(vm, rt.deps.Async, func(ctx context.Context) (any, error) {
+			client, ok := rt.mcpClient(serverID)
+			if !ok {
+				return nil, fmt.Errorf("mcp: server %q is not connected", serverID)
+			}
+			res, err := client.ReadResource(ctx, uri)
+			if err != nil {
+				return nil, err
+			}
+			data, err := json.Marshal(res)
+			if err != nil {
+				return nil, err
+			}
+			var out map[string]any
+			if err := json.Unmarshal(data, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		})
 	})
 
 	_ = obj.Set("servers", func() []string {
@@ -152,11 +163,12 @@ func (rt *Runtime) buildMCPObject(vm *goja.Runtime) *goja.Object {
 		return ids
 	})
 
-	_ = obj.Set("close", func(serverID string) bool {
-		if rt.deps.MCP == nil {
-			return false
+	rt.bindAsync(vm, obj, "close", rt.deps.Async, func(ctx context.Context, args []any) (any, error) {
+		if rt.deps.MCP == nil || len(args) == 0 {
+			return false, nil
 		}
-		return rt.deps.MCP.Close(rt.owner, serverID)
+		serverID, _ := args[0].(string)
+		return rt.deps.MCP.Close(rt.owner, serverID), nil
 	})
 
 	return obj

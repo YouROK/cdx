@@ -278,9 +278,9 @@ func TestCLIAndDaemonEndToEndWithPlugins(t *testing.T) {
 				return "executed on " + args.target;
 			});
 
-			cdx.hooks.on("tool:before_call", 10, function(payload) {
+			cdx.hooks.on("tool:before_call", 10, async function(payload) {
 				if (payload.permission === "dangerous") {
-					var ans = cdx.questions.ask({
+					var ans = await cdx.questions.ask({
 						kind: "permission",
 						title: "Run sensitive_op on " + payload.arguments.target + "?",
 						options: [

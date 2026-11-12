@@ -212,13 +212,13 @@ function setup(cdx) {
 
   // ---- tools ----
 
-  function ensure(serverID) {
+  async function ensure(serverID) {
     var status = cdx.mcp.status(serverID);
     if (status && status.connected) return status;
     var server = findServer(serverID);
     if (!server) throw new Error("MCP server " + serverID + " is not configured");
     if (!server.enabled) throw new Error("MCP server " + serverID + " is disabled");
-    var info = cdx.mcp.connect(hostConfig(server));
+    var info = await cdx.mcp.connect(hostConfig(server));
     cdx.storage.set(CATALOG_PREFIX + serverID, info.tools || []);
     return info;
   }
@@ -294,10 +294,10 @@ function setup(cdx) {
       description: describeTool(tool),
       permission: permissionFor(server, tool),
       input_schema: tool.inputSchema || { type: "object" }
-    }, cdx.inWorker(function (args) {
-      ensure(server.id);
-      return toolResult(cdx.mcp.call(server.id, tool.name, args || {}));
-    }));
+    }, async function (args) {
+      await ensure(server.id);
+      return toolResult(await cdx.mcp.call(server.id, tool.name, args || {}));
+    });
     return name;
   }
 
@@ -317,13 +317,13 @@ function setup(cdx) {
         },
         required: ["server", "tool"]
       }
-    }, cdx.inWorker(function (args) {
+    }, async function (args) {
       var serverID = String(args.server || "");
       var toolName = String(args.tool || "");
       if (!serverID || !toolName) throw new Error("server and tool are required");
-      ensure(serverID);
-      return toolResult(cdx.mcp.call(serverID, toolName, args.arguments || {}));
-    }));
+      await ensure(serverID);
+      return toolResult(await cdx.mcp.call(serverID, toolName, args.arguments || {}));
+    });
     return "mcp_call";
   }
 
@@ -448,9 +448,9 @@ function setup(cdx) {
         },
         required: ["query"]
       }
-    }, cdx.inWorker(function (args) {
+    }, function (args) {
       return findTools(String(args.query || ""), String(args.server || ""));
-    }));
+    });
     return "mcp_find_tools";
   }
 
@@ -463,9 +463,9 @@ function setup(cdx) {
         type: "object",
         properties: { server: { type: "string", description: "Optional MCP server id" } }
       }
-    }, cdx.inWorker(function (args) {
+    }, function (args) {
       return listTools(String(args.server || ""));
-    }));
+    });
     return "mcp_list_tools";
   }
 
@@ -484,7 +484,7 @@ function setup(cdx) {
 
   function registerTools() {
     var exposed = [];
-    if (!cdx.worker) unregisterTools();
+    unregisterTools();
 
     var list = loadServers();
     var gateway = [];
@@ -514,7 +514,7 @@ function setup(cdx) {
     }
     if (visible && hasAnyResources()) exposed.push(registerResourceTools());
 
-    if (!cdx.worker) cdx.storage.set(EXPOSED_KEY, exposed);
+    cdx.storage.set(EXPOSED_KEY, exposed);
   }
 
   // hasAnyResources reports whether a connected server exposes resources.
@@ -535,7 +535,7 @@ function setup(cdx) {
     };
   }
 
-  function listResources(serverID) {
+  async function listResources(serverID) {
     var list = loadServers();
     var out = [];
     var truncated = false;
@@ -543,8 +543,8 @@ function setup(cdx) {
       var server = list[i];
       if (!server.enabled) continue;
       if (serverID && server.id !== serverID) continue;
-      ensure(server.id);
-      var resources = cdx.mcp.listResources(server.id) || [];
+      await ensure(server.id);
+      var resources = await cdx.mcp.listResources(server.id) || [];
       for (var j = 0; j < resources.length; j++) {
         if (out.length >= 100) {
           truncated = true;
@@ -559,11 +559,11 @@ function setup(cdx) {
     return { resources: out, count: out.length, truncated: truncated };
   }
 
-  function readResource(serverID, uri) {
+  async function readResource(serverID, uri) {
     var server = findServer(serverID);
     if (!server) throw new Error("MCP server " + serverID + " is not configured");
-    ensure(serverID);
-    var res = cdx.mcp.readResource(serverID, uri) || {};
+    await ensure(serverID);
+    var res = await cdx.mcp.readResource(serverID, uri) || {};
     var contents = res.contents || [];
     var parts = [];
     for (var i = 0; i < contents.length; i++) {
@@ -586,9 +586,9 @@ function setup(cdx) {
         type: "object",
         properties: { server: { type: "string", description: "Optional MCP server id" } }
       }
-    }, cdx.inWorker(function (args) {
-      return listResources(String(args.server || ""));
-    }));
+    }, async function (args) {
+      return await listResources(String(args.server || ""));
+    });
 
     cdx.tools.register({
       name: "mcp_read_resource",
@@ -602,9 +602,9 @@ function setup(cdx) {
         },
         required: ["server", "uri"]
       }
-    }, cdx.inWorker(function (args) {
-      return readResource(String(args.server || ""), String(args.uri || ""));
-    }));
+    }, async function (args) {
+      return await readResource(String(args.server || ""), String(args.uri || ""));
+    });
 
     return "mcp_list_resources";
   }
@@ -659,9 +659,9 @@ function setup(cdx) {
     return String(err);
   }
 
-  function refreshAll() {
+  async function refreshAll() {
     var ids = cdx.mcp.servers() || [];
-    for (var k = 0; k < ids.length; k++) cdx.mcp.close(ids[k]);
+    for (var k = 0; k < ids.length; k++) await cdx.mcp.close(ids[k]);
 
     var list = loadServers();
     var status = {};
@@ -672,8 +672,8 @@ function setup(cdx) {
         continue;
       }
       try {
-        var info = cdx.mcp.connect(hostConfig(server));
-        var tools = cdx.mcp.listTools(server.id) || [];
+        var info = await cdx.mcp.connect(hostConfig(server));
+        var tools = await cdx.mcp.listTools(server.id) || [];
         cdx.storage.set(CATALOG_PREFIX + server.id, tools);
         var capabilities = (info.server && info.server.capabilities) || {};
         status[server.id] = {
@@ -733,7 +733,7 @@ function setup(cdx) {
       ctx.json(200, snapshot());
     });
 
-    cdx.http.post("/api/plugins/mcp/servers", function (ctx) {
+    cdx.http.post("/api/plugins/mcp/servers", async function (ctx) {
       var body = ctx.bindJSON() || {};
       try {
         saveServersInput(body);
@@ -741,21 +741,21 @@ function setup(cdx) {
         ctx.json(400, { error: describeError(err) });
         return;
       }
-      var status = refreshAll();
+      var status = await refreshAll();
       var out = snapshot();
       out.status = status;
       ctx.json(200, out);
     });
 
-    cdx.http.post("/api/plugins/mcp/servers/test", function (ctx) {
+    cdx.http.post("/api/plugins/mcp/servers/test", async function (ctx) {
       var body = ctx.bindJSON() || {};
       var raw = body.server || {};
       var id = slugID(raw.id || raw.name);
       var result = { ok: false };
       try {
         var server = testServer(raw);
-        var info = cdx.mcp.connect(hostConfig(server));
-        var tools = cdx.mcp.listTools(server.id) || [];
+        var info = await cdx.mcp.connect(hostConfig(server));
+        var tools = await cdx.mcp.listTools(server.id) || [];
         result.ok = true;
         result.revision = info.revision;
         result.server = info.server || {};
@@ -763,12 +763,12 @@ function setup(cdx) {
       } catch (err) {
         result.error = describeError(err);
       }
-      if (id) cdx.mcp.close(id);
+      if (id) await cdx.mcp.close(id);
       ctx.json(200, result);
     });
 
-    cdx.http.post("/api/plugins/mcp/refresh", function (ctx) {
-      var status = refreshAll();
+    cdx.http.post("/api/plugins/mcp/refresh", async function (ctx) {
+      var status = await refreshAll();
       var out = snapshot();
       out.status = status;
       ctx.json(200, out);
@@ -780,7 +780,7 @@ function setup(cdx) {
       ctx.json(200, { server: id, tools: tools });
     });
 
-    cdx.http.post("/api/plugins/mcp/import", function (ctx) {
+    cdx.http.post("/api/plugins/mcp/import", async function (ctx) {
       var body = ctx.bindJSON() || {};
       var parsed;
       try {
@@ -807,7 +807,7 @@ function setup(cdx) {
         if (byID.hasOwnProperty(id)) list.push(byID[id]);
       }
       saveServers(list);
-      var status = refreshAll();
+      var status = await refreshAll();
       var out = snapshot();
       out.status = status;
       out.imported = imported;
@@ -860,7 +860,6 @@ function setup(cdx) {
   }
 
   registerTools();
-  if (cdx.worker) return;
 
   registerInstructionsHook();
   registerRoutes();
@@ -872,7 +871,7 @@ function setup(cdx) {
     entry: "/ui/mcp/dist/panel.js",
     ui_api: 1
   });
-  cdx.after(500, function () {
-    if (!cdx.storage.get(STATUS_KEY)) refreshAll();
+  cdx.after(500, async function () {
+    if (!cdx.storage.get(STATUS_KEY)) await refreshAll();
   });
 }

@@ -416,6 +416,11 @@ textarea:focus {
   color: var(--danger);
 }
 
+.badge-muted {
+  background: var(--hover);
+  color: var(--muted);
+}
+
 .badge-accent {
   background: var(--accent-soft);
   color: var(--accent-text);

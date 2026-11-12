@@ -52,7 +52,6 @@ func TestI18nPluginCatalogLayersAndLocale(t *testing.T) {
 
 	writePluginFiles(t, userDir, "low-pack", `{"id":"low-pack","name":"Low Pack","version":"1.0.0","description":"low","entry":"main.js","order":2000}`, `
 		function setup(cdx) {
-			if (cdx.worker) return;
 			cdx.bus.request("i18n:register", { id: cdx.id, tables: {
 				en: { "pack.Message": "Low" },
 				ru: { "pack.Message": "Низкий" }
@@ -61,7 +60,6 @@ func TestI18nPluginCatalogLayersAndLocale(t *testing.T) {
 	`)
 	writePluginFiles(t, userDir, "high-pack", `{"id":"high-pack","name":"High Pack","version":"1.0.0","description":"high","entry":"main.js","order":5000}`, `
 		function setup(cdx) {
-			if (cdx.worker) return;
 			cdx.bus.request("i18n:register", { id: cdx.id, tables: {
 				en: { "pack.Message": "High" },
 				ru: { "pack.Message": "Высокий" }

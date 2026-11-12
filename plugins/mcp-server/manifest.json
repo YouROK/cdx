@@ -1,0 +1,8 @@
+{
+  "id": "mcp-server",
+  "name": "MCP Endpoint",
+  "version": "1.0.0",
+  "description": "Serves this daemon's tools to other agents over the Model Context Protocol",
+  "entry": "main.js",
+  "order": 185
+}

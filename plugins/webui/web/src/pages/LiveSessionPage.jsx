@@ -135,6 +135,11 @@ export function LiveSessionPage({ sessionId, onBack, onOpenHistory }) {
             {t("webui.Live.Title")}: <span className="mono">{session.id || sessionId}</span>
           </h3>
           <div className="mono text-xs muted">{session.workdir || ""}</div>
+          {session.origin ? (
+            <div className="mono text-xs muted">
+              {t("webui.Session.Remote")}: {session.origin}
+            </div>
+          ) : null}
         </div>
         <div className="row-gap-xs">
           <LiveStatus running={running} offline={offline} />

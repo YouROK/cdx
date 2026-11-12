@@ -244,7 +244,7 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Keep the system prompt and provider tool payload within the configured budget.
 
 ## Stage 34: MCP Documentation and End-to-End
-- [x] Document the plugin, the server configuration, and the protocols in `MCP.md`, `PLUGINS.md`, and `README.md`.
+- [x] Document the plugin, the server configuration, and the protocols in `MCP-CLIENT.md`, `PLUGINS.md`, and `README.md`.
 - [x] Add a daemon test with a fake MCP server that runs a full turn calling its tool.
 - [x] Verify installation and packaging of the new plugin.
 
@@ -281,3 +281,57 @@ Work proceeds one stage at a time. Each stage must have passing unit tests (`go 
 - [x] Keep English literals as fallbacks when `i18n` is unavailable.
 - [x] Cover a translated permission prompt with a plugin test.
 - [x] Add a frontend test that checks every literal `t()` key against the base catalog.
+
+## Stage 40: MCP Server Foundation
+- [x] Extract a shared tool execution path that runs `tool:before_call`, the approval question, and `tool:after_call`, and use it from the session loop.
+- [x] Expose that path to plugins as `cdx.tools.call(name, args, opts)` and add it to the Plugin API reference.
+- [x] Add `plugins/mcp-server` with a master switch and a `/mcp` route that answers `404` while the server is disabled; the address follows the daemon listener.
+- [x] Issue a token per client through the plugin API, keep the secret in the plugin secrets, show it once, and revoke it.
+- [x] Guard `POST /mcp` and `DELETE /mcp` with its own middleware, check `Origin`, and keep the `auth` plugin and `CDX_ALLOW_REMOTE_HOST` out of it.
+- [x] Serve the legacy `initialize` handshake with `Mcp-Session-Id` and plain JSON replies, plus `tools/list` and `tools/call`.
+- [x] Cover token rejection, a disabled server, the handshake, a tool call, and revocation with a daemon test.
+
+## Stage 41: MCP Tools and Permissions
+- [x] Serve `tools/list` from the tool registry with the `cdx_` prefix, and keep internal tools such as `subagent` off the list.
+- [x] Serve `tools/call` through the shared path, so the `permissions` plugin and approvals apply to a remote call.
+- [x] Add a permission row per client for the read, edit, and dangerous classes, each `allow`, `ask`, or `deny`, with a read-only default.
+- [x] Answer `deny` without a question and turn `ask` into a pending approval that names its id, so the client retries once the operator approves; a plugin handler cannot block, because the same VM serves the panel.
+- [x] Never store a grant from a remote call: an approval covers one exact call and is consumed by it.
+- [x] Cap the request body and the result size, and log every call with its client id inside the plugin log line.
+- [x] Extend the plugin panel with the switch, the client list, the permission rows, pending approvals, and the token actions.
+- [x] Test a full loop with the `cdx` MCP client calling a tool on a second daemon.
+
+## Stage 42: MCP Tasks
+- [x] Run a turn in the background through `cdx.tasks`, so the task outlives the request, and keep the plugin VM free while it runs.
+- [x] Register `cdx_task_start`, `cdx_task_get`, `cdx_task_answer`, and `cdx_task_cancel` only when the daemon has a model, and answer a start without one at once. A listing cannot signal a change without an event stream, so the tools stay listed.
+- [x] Create the task session as kind `task` with `origin=mcp:<token id>`, its own directory under `remote_root`, a preset from the `task_presets` allowlist, and the session step budget.
+- [x] Filter the tools of that session to the classes the client has on `allow`, and force the step limit to `stop` so a task never waits on a continue question.
+- [x] Allow one active task per token, answer a second start with `task_slot_busy`, and keep the record in the plugin storage so a reload does not leak the slot.
+- [x] Stop a task that needs a decision with `needs_input`, resume it through `cdx_task_answer`, downgrade a remote `always`, `daemon`, or `session` answer to `once`, and cancel it on its timeout.
+- [x] Keep the task out of the active session of its directory, and show it in the session list with its owner.
+
+## Stage 43: Modern MCP Revision and Elicitation
+- [x] Answer `server/discover` with `supportedVersions` and the server capabilities, and detect the revision from `io.modelcontextprotocol/protocolVersion` in `_meta`.
+- [x] Mark every result with `resultType: "complete"` on the modern revision, and keep the legacy handshake unchanged.
+- [x] Return `input_required` with an `elicitation/create` request and a `requestState` that names the stored approval, so a capable client asks its own user and repeats the call with `inputResponses`.
+- [x] Accept an approval given in the panel as an accepted elicitation, and fall back to the panel and retry flow for the legacy revision.
+- [x] Test both revisions with a raw JSON request, and assert that the `cdx` client negotiates `2026-07-28` and completes an in-band approval that writes a file.
+
+## Stage 44: Universal Question Channel
+- [ ] Add a deferred mode to `question.Ask`: an asker that returns the question instead of blocking, next to the terminal and task askers.
+- [ ] Carry it out of `ToolRunner` and `cdx.tools.call` as a typed result with the question, its tool, and its arguments.
+- [ ] Turn it into `input_required` in the MCP server, keep the pending record with the panel queue, and resume the preflight on the retry so the handler runs once.
+- [ ] Route the terminal, the web page, the panel, and a task through the same pending records with one TTL and one audit line.
+- [ ] Return `edit` and `dangerous` on the Permissions page to `ask`, and cover both channels with tests: a question, a retry, and exactly one side effect.
+
+## Stage 45: Async Plugin Runtime
+- [x] Replace the worker VM pool with a promise-aware single-VM runtime per plugin.
+- [x] Add `async`/`await` support, async context tracking, unhandled rejection logging, and `cdx.yield`/`cdx.sleep`.
+- [x] Return promises from blocking host calls: `cdx.sys.fetch`, `cdx.sys.exec`, `cdx.questions.ask`, `cdx.agents`, `cdx.mcp`, and `cdx.tools.call`.
+- [x] Add a shared limiter for concurrent external calls.
+- [x] Remove `workers`, `cdx.worker`, and `cdx.inWorker` from the runtime and manifests.
+- [x] Rewrite the built-in plugins to async/await and drop the worker guards.
+- [x] Update `ARCHITECTURE.md`, `PLUGINS.md`, `MCP-CLIENT.md`, the API reference, and the plugin-author prompt.
+- [x] Rewrite the worker tests as async responsiveness, rejection, context, and limiter tests.
+- [x] Pass `go test ./...` and `go vet ./...`.
+- [ ] Run the manual smoke test: providers with streaming, shell, ask, subagent, MCP, i18n, and permissions.

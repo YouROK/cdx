@@ -147,7 +147,7 @@ function setup(cdx) {
     return out;
   }
 
-  function completeOpenAI(provider, modelRec, apiKey, req, emit) {
+  async function completeOpenAI(provider, modelRec, apiKey, req, emit) {
     var baseURL = (provider.base_url || "https://api.openai.com/v1").replace(/\/+$/, "");
     var url = baseURL + "/chat/completions";
 
@@ -185,7 +185,7 @@ function setup(cdx) {
     var toolCallsByIndex = {};
     var usage = null;
 
-    var resp = cdx.sys.fetch(url, {
+    var resp = await cdx.sys.fetch(url, {
       method: "POST",
       headers: headers,
       body: JSON.stringify(bodyObj),
@@ -262,7 +262,7 @@ function setup(cdx) {
     };
   }
 
-  function completeAnthropic(provider, modelRec, apiKey, req, emit) {
+  async function completeAnthropic(provider, modelRec, apiKey, req, emit) {
     var baseURL = (provider.base_url || "https://api.anthropic.com").replace(/\/+$/, "");
     var url = baseURL + "/v1/messages";
 
@@ -337,7 +337,7 @@ function setup(cdx) {
     var reasoning = "";
     var currentTools = {};
 
-    var resp = cdx.sys.fetch(url, {
+    var resp = await cdx.sys.fetch(url, {
       method: "POST",
       headers: headers,
       body: JSON.stringify(bodyObj),
@@ -417,7 +417,7 @@ function setup(cdx) {
       }
       return out;
     },
-    complete: cdx.inWorker(function(req, emit) {
+    complete: async function(req, emit) {
       var modelRec = findModel(req.model);
       if (!modelRec) {
         var all = getModels();
@@ -432,10 +432,10 @@ function setup(cdx) {
       }
       var apiKey = cdx.secrets.get(secretKeyFor(provider.name)) || "";
       if (provider.protocol === "anthropic") {
-        return completeAnthropic(provider, modelRec, apiKey, req, emit);
+        return await completeAnthropic(provider, modelRec, apiKey, req, emit);
       }
-      return completeOpenAI(provider, modelRec, apiKey, req, emit);
-    })
+      return await completeOpenAI(provider, modelRec, apiKey, req, emit);
+    }
   });
 
   // Self-contained HTTP endpoints for managing providers, encrypted keys, and models.
@@ -514,7 +514,7 @@ function setup(cdx) {
     ctx.json(200, { deleted: name });
   });
 
-  api.post("/providers/test", function(ctx) {
+  api.post("/providers/test", async function(ctx) {
     var body = ctx.bindJSON() || {};
     var name = String(body.name || "");
     var provider = findProvider(name);
@@ -534,7 +534,7 @@ function setup(cdx) {
       }
     }
     try {
-      var resp = cdx.sys.fetch(url, { method: "GET", headers: headers, timeout_ms: 10000 });
+      var resp = await cdx.sys.fetch(url, { method: "GET", headers: headers, timeout_ms: 10000 });
       if (resp.ok) {
         ctx.json(200, { ok: true, message: "Connection OK (" + resp.status + ")" });
       } else {
@@ -574,7 +574,7 @@ function setup(cdx) {
     ctx.json(200, { default: id });
   });
 
-  api.post("/providers/discover", function(ctx) {
+  api.post("/providers/discover", async function(ctx) {
     var body = ctx.bindJSON() || {};
     var name = String(body.name || "");
     var provider = findProvider(name);
@@ -595,7 +595,7 @@ function setup(cdx) {
     }
     var resp;
     try {
-      resp = cdx.sys.fetch(url, { method: "GET", headers: headers, timeout_ms: 15000 });
+      resp = await cdx.sys.fetch(url, { method: "GET", headers: headers, timeout_ms: 15000 });
     } catch (e) {
       ctx.json(502, { error: "discover failed: " + String(e) });
       return;

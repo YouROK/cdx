@@ -513,7 +513,7 @@ func TestToolsUseSessionWorkdir(t *testing.T) {
 	}
 }
 
-func TestUnmarkedProviderAndToolStayInControlVM(t *testing.T) {
+func TestProviderAndToolHandlersRun(t *testing.T) {
 	tmp := t.TempDir()
 	st, err := store.Open(store.Options{
 		DBPath:        filepath.Join(tmp, "cdx.db"),
@@ -539,9 +539,8 @@ func TestUnmarkedProviderAndToolStayInControlVM(t *testing.T) {
 		"id": "mock-control",
 		"name": "Mock Control",
 		"version": "1.0.0",
-		"description": "Keeps unmarked functions in the control VM",
-		"entry": "main.js",
-		"workers": 2
+		"description": "Runs the provider and tool handlers",
+		"entry": "main.js"
 	}`, `
 		function setup(cdx) {
 			cdx.providers.register({
@@ -577,18 +576,6 @@ func TestUnmarkedProviderAndToolStayInControlVM(t *testing.T) {
 		t.Fatalf("unexpected tool result: %v (err=%v)", toolRes, err)
 	}
 
-	mgr.mu.RLock()
-	rt := mgr.plugins["mock-control"]
-	mgr.mu.RUnlock()
-	if rt == nil {
-		t.Fatal("runtime not found")
-	}
-	rt.workerMu.Lock()
-	workers := len(rt.workers)
-	rt.workerMu.Unlock()
-	if workers != 0 {
-		t.Fatalf("unmarked functions started %d worker VMs", workers)
-	}
 }
 
 // questionOptionIDs lists the option ids of a permission question.
@@ -856,7 +843,7 @@ func TestPermissionsReturnQuestions(t *testing.T) {
 	}
 }
 
-func TestPluginWorkerVMsKeepControlPlaneResponsive(t *testing.T) {
+func TestAsyncHandlersKeepControlPlaneResponsive(t *testing.T) {
 	tmp := t.TempDir()
 	st, err := store.Open(store.Options{
 		DBPath:        filepath.Join(tmp, "cdx.db"),
@@ -892,37 +879,36 @@ func TestPluginWorkerVMsKeepControlPlaneResponsive(t *testing.T) {
 	defer srv.Close()
 
 	pluginsDir := filepath.Join(tmp, "plugins")
-	writePluginFiles(t, pluginsDir, "mock-worker", `{
-		"id": "mock-worker",
-		"name": "Mock Worker",
+	writePluginFiles(t, pluginsDir, "mock-async", `{
+		"id": "mock-async",
+		"name": "Mock Async",
 		"version": "1.0.0",
-		"description": "Tests isolated worker VMs",
-		"entry": "main.js",
-		"workers": 2
+		"description": "Tests async handlers",
+		"entry": "main.js"
 	}`, fmt.Sprintf(`
 		function setup(cdx) {
-			cdx.http.get("/api/mock-worker/ping", function(ctx) {
-				ctx.json(200, { ok: true, worker: cdx.worker });
+			cdx.http.get("/api/mock-async/ping", function(ctx) {
+				ctx.json(200, { ok: true });
 			});
 
 			cdx.providers.register({
 				listModels: function() {
-					return [{ id: "worker-model", name: "Worker Model", default: true }];
+					return [{ id: "async-model", name: "Async Model", default: true }];
 				},
-				complete: cdx.inWorker(function(req, emit) {
-					var resp = cdx.sys.fetch(%q, { method: "GET", timeout_ms: 5000 });
+				complete: async function(req, emit) {
+					var resp = await cdx.sys.fetch(%q, { method: "GET", timeout_ms: 5000 });
 					return { content: "completed:" + resp.status };
-				})
+				}
 			});
 
 			cdx.tools.register({
 				name: "slow_tool",
 				description: "Blocks until released",
 				input_schema: { type: "object", properties: {} }
-			}, cdx.inWorker(function(args) {
-				var resp = cdx.sys.fetch(%q, { method: "GET", timeout_ms: 5000 });
+			}, async function(args) {
+				var resp = await cdx.sys.fetch(%q, { method: "GET", timeout_ms: 5000 });
 				return "tool:" + resp.status;
-			}));
+			});
 		}
 	`, srv.URL+"/block", srv.URL+"/block"))
 
@@ -939,7 +925,7 @@ func TestPluginWorkerVMsKeepControlPlaneResponsive(t *testing.T) {
 		}
 	}
 
-	// Completion runs in a worker VM; the control VM must answer status and HTTP routes meanwhile.
+	// Completion waits in Go while the VM keeps serving status and HTTP routes.
 	type completeResult struct {
 		resp *CompleteResponse
 		err  error
@@ -959,14 +945,14 @@ func TestPluginWorkerVMsKeepControlPlaneResponsive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListModels while completion runs failed: %v", err)
 	}
-	if len(models) != 1 || models[0].ID != "worker-model" {
+	if len(models) != 1 || models[0].ID != "async-model" {
 		t.Fatalf("unexpected models while completion runs: %+v", models)
 	}
 
 	httpDone := make(chan int, 1)
 	go func() {
 		w := httptest.NewRecorder()
-		rtRouter.ServeHTTP(w, httptest.NewRequest("GET", "/api/mock-worker/ping", nil))
+		rtRouter.ServeHTTP(w, httptest.NewRequest("GET", "/api/mock-async/ping", nil))
 		httpDone <- w.Code
 	}()
 	select {
@@ -991,7 +977,7 @@ func TestPluginWorkerVMsKeepControlPlaneResponsive(t *testing.T) {
 		t.Fatal("provider completion did not finish")
 	}
 
-	// Tool handlers also run in workers, so the control plane stays responsive.
+	// Tool handlers also yield the VM while they wait.
 	toolDone := make(chan struct {
 		res any
 		err error
@@ -1008,7 +994,7 @@ func TestPluginWorkerVMsKeepControlPlaneResponsive(t *testing.T) {
 	httpDone = make(chan int, 1)
 	go func() {
 		w := httptest.NewRecorder()
-		rtRouter.ServeHTTP(w, httptest.NewRequest("GET", "/api/mock-worker/ping", nil))
+		rtRouter.ServeHTTP(w, httptest.NewRequest("GET", "/api/mock-async/ping", nil))
 		httpDone <- w.Code
 	}()
 	select {
@@ -1273,7 +1259,7 @@ func (a *recordingQuestionAsker) Ask(_ context.Context, q question.Question) (qu
 	return a.answer, nil
 }
 
-func TestQuestionsAskFromWorker(t *testing.T) {
+func TestQuestionsAskFromAsyncHandler(t *testing.T) {
 	tmp := t.TempDir()
 	st, err := store.Open(store.Options{
 		DBPath:        filepath.Join(tmp, "cdx.db"),
@@ -1299,9 +1285,8 @@ func TestQuestionsAskFromWorker(t *testing.T) {
 		"id": "ask-plugin",
 		"name": "Ask Plugin",
 		"version": "1.0.0",
-		"description": "Asks the client from a worker VM",
-		"entry": "main.js",
-		"workers": 1
+		"description": "Asks the client from an async handler",
+		"entry": "main.js"
 	}`, `
 		function setup(cdx) {
 			cdx.tools.register({
@@ -1313,8 +1298,8 @@ func TestQuestionsAskFromWorker(t *testing.T) {
 					properties: { question: { type: "string" } },
 					required: ["question"]
 				}
-			}, cdx.inWorker(function(args) {
-				return cdx.questions.ask({
+			}, async function(args) {
+				return await cdx.questions.ask({
 					source: "core",
 					kind: "model",
 					title: args.question,
@@ -1326,7 +1311,7 @@ func TestQuestionsAskFromWorker(t *testing.T) {
 					default: "a",
 					text: true
 				});
-			}));
+			});
 		}
 	`)
 	if _, err := mgr.LoadPlugin(context.Background(), filepath.Join(pluginsDir, "ask-plugin")); err != nil {
@@ -1547,62 +1532,19 @@ func TestSubagentPluginDelegates(t *testing.T) {
 	}
 }
 
-func TestWorkerPoolQueuesInsteadOfFailing(t *testing.T) {
-	tmp := t.TempDir()
-	st, err := store.Open(store.Options{
-		DBPath:        filepath.Join(tmp, "cdx.db"),
-		MasterKeyPath: filepath.Join(tmp, "master.key"),
-	})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
+func TestAsyncLimiterQueues(t *testing.T) {
+	limiter := NewAsyncLimiter(1)
+	if err := limiter.Acquire(context.Background()); err != nil {
+		t.Fatalf("acquire first slot: %v", err)
 	}
-	defer st.Close()
-
-	mgr := NewManager(RuntimeDependencies{
-		Store:    st,
-		Bus:      bus.New(),
-		Router:   router.New(),
-		Registry: NewRegistry(),
-		Logger:   logx.New(),
-	})
-	defer mgr.CloseAll()
-
-	pluginsDir := filepath.Join(tmp, "plugins")
-	writePluginFiles(t, pluginsDir, "pool-plugin", `{
-		"id": "pool-plugin",
-		"name": "Pool Plugin",
-		"version": "1.0.0",
-		"description": "Tests the worker pool",
-		"entry": "main.js",
-		"workers": 1
-	}`, `function setup(cdx) {}`)
-	if _, err := mgr.LoadPlugin(context.Background(), filepath.Join(pluginsDir, "pool-plugin")); err != nil {
-		t.Fatalf("load plugin: %v", err)
-	}
-
-	rt := mgr.plugins["pool-plugin"]
-	if rt == nil {
-		t.Fatal("plugin runtime is missing")
-	}
-	if workers := rt.ensureWorkerPool(context.Background()); len(workers) != 1 {
-		t.Fatalf("expected one worker, got %d", len(workers))
-	}
-
-	first, err := rt.acquireWorker(context.Background())
-	if err != nil {
-		t.Fatalf("acquire first worker: %v", err)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := rt.acquireWorker(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("a busy pool must wait for the context, got %v", err)
+	if err := limiter.Acquire(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a busy limiter must wait for the context, got %v", err)
 	}
-
-	rt.releaseWorker(first)
-	second, err := rt.acquireWorker(context.Background())
-	if err != nil || second != first {
-		t.Fatalf("the released worker was not reused: worker=%p err=%v", second, err)
+	limiter.Release()
+	if err := limiter.Acquire(context.Background()); err != nil {
+		t.Fatalf("released slot was not reusable: %v", err)
 	}
-	rt.releaseWorker(second)
+	limiter.Release()
 }

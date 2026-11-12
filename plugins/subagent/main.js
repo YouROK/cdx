@@ -25,22 +25,22 @@ function setup(cdx) {
         }
       }
     }
-  }, cdx.inWorker(function(args) {
+  }, async function(args) {
     var tasks = taskList(args.tasks);
     if (tasks.length > 0) {
-      var batch = cdx.agents.runMany({ prompts: tasks, preset: "subagent" });
+      var batch = await cdx.agents.runMany({ prompts: tasks, preset: "subagent" });
       return { results: batch.results };
     }
 
     var prompt = String(args.prompt || "").trim();
     if (!prompt) return { error: "prompt or tasks are required" };
 
-    var result = cdx.agents.run({ prompt: prompt, preset: "subagent" });
+    var result = await cdx.agents.run({ prompt: prompt, preset: "subagent" });
     return {
       content: result.content,
       session_id: result.session_id,
       steps: result.steps,
       stopped_reason: result.stopped_reason
     };
-  }));
+  });
 }

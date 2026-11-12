@@ -45,29 +45,6 @@ var ErrPluginBusy = errors.New("plugin is busy")
 // example a permission prompt answered in the terminal.
 var vmBusyTimeout = 5 * time.Second
 
-type runtimeMode int
-
-const (
-	modePrimary runtimeMode = iota
-	modeWorker
-)
-
-const workerFunctionFlag = "__cdx_worker"
-
-func unwrapWorkerFunction(v goja.Value) (goja.Callable, bool) {
-	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
-		return nil, false
-	}
-	if obj, ok := v.(*goja.Object); ok {
-		if marker := obj.Get(workerFunctionFlag); marker != nil && marker.ToBoolean() {
-			fn, _ := goja.AssertFunction(obj.Get("fn"))
-			return fn, true
-		}
-	}
-	fn, _ := goja.AssertFunction(v)
-	return fn, false
-}
-
 // RuntimeDependencies bundles the core subsystems exposed to a plugin VM.
 type RuntimeDependencies struct {
 	Store    *store.Store
@@ -77,8 +54,13 @@ type RuntimeDependencies struct {
 	Plugins  *Manager
 	Logger   *logx.Logger
 	Agents   AgentRunner
+	Tools    ToolRunner
+	Tasks    TaskRunner
 	Sys      *SysAPI
 	MCP      *mcp.Manager
+	Async    *AsyncLimiter
+	// AsyncExec bounds concurrent shell processes.
+	AsyncExec *AsyncLimiter
 }
 
 // Runtime manages a single plugin running inside its own dedicated Goja VM goroutine.
@@ -92,19 +74,14 @@ type Runtime struct {
 	logScope          *logx.Scope
 	settingsSchema    *schema.Schema
 	settingsSchemaRaw map[string]any
-	mode              runtimeMode
 
 	activeCtx context.Context
 	cmds      chan vmCommand
+	jobs      chan func(*goja.Runtime)
+	ctx       context.Context
+	cancel    context.CancelFunc
 	done      chan struct{}
 	closeOnce sync.Once
-
-	workerMu       sync.Mutex
-	workers        []*Runtime
-	workerFree     chan *Runtime
-	workersFailed  bool
-	workerTools    map[string]goja.Callable
-	workerComplete goja.Callable
 
 	timerMu sync.Mutex
 	timers  []*afterJob
@@ -118,10 +95,6 @@ type afterJob struct {
 
 // StartRuntime initializes the Goja VM for a plugin, binds the cdx object, and runs its entry script.
 func StartRuntime(ctx context.Context, dir string, m *Manifest, deps RuntimeDependencies) (*Runtime, error) {
-	return startRuntime(ctx, dir, m, deps, modePrimary)
-}
-
-func startRuntime(ctx context.Context, dir string, m *Manifest, deps RuntimeDependencies, mode runtimeMode) (*Runtime, error) {
 	if deps.Sys == nil {
 		deps.Sys = NewSysAPI()
 	}
@@ -144,6 +117,7 @@ func startRuntime(ctx context.Context, dir string, m *Manifest, deps RuntimeDepe
 		}
 	}
 
+	runtimeCtx, runtimeCancel := context.WithCancel(context.Background())
 	rt := &Runtime{
 		manifest:    m,
 		dir:         dir,
@@ -152,8 +126,10 @@ func startRuntime(ctx context.Context, dir string, m *Manifest, deps RuntimeDepe
 		plainStore:  plainNS,
 		secretStore: secretNS,
 		logScope:    logger.Tagged("Plugin:" + m.ID),
-		mode:        mode,
 		cmds:        make(chan vmCommand, 64),
+		jobs:        make(chan func(*goja.Runtime), 64),
+		ctx:         runtimeCtx,
+		cancel:      runtimeCancel,
 		done:        make(chan struct{}),
 	}
 
@@ -174,8 +150,14 @@ func startRuntime(ctx context.Context, dir string, m *Manifest, deps RuntimeDepe
 		}
 		if setupVal := vm.Get("setup"); setupVal != nil && !goja.IsUndefined(setupVal) {
 			if setupFn, ok := goja.AssertFunction(setupVal); ok {
-				if _, callErr := setupFn(goja.Undefined(), vm.Get("cdx")); callErr != nil {
+				res, callErr := setupFn(goja.Undefined(), vm.Get("cdx"))
+				if callErr != nil {
 					return nil, fmt.Errorf("setup() in %s: %w", m.Entry, callErr)
+				}
+				if res != nil {
+					if _, ok := res.Export().(*goja.Promise); ok {
+						return nil, fmt.Errorf("setup() in %s must be synchronous; start background work with an async function", m.Entry)
+					}
 				}
 			}
 		}
@@ -202,14 +184,7 @@ func (rt *Runtime) Dir() string {
 // Close unregisters all plugin hooks, routes, tools, and stops the VM loop.
 func (rt *Runtime) Close() {
 	rt.closeOnce.Do(func() {
-		rt.workerMu.Lock()
-		workers := rt.workers
-		rt.workers = nil
-		rt.workerMu.Unlock()
-		for _, worker := range workers {
-			worker.Close()
-		}
-
+		rt.cancel()
 		if rt.deps.Bus != nil {
 			rt.deps.Bus.UnregisterOwner(rt.owner)
 		}
@@ -226,108 +201,18 @@ func (rt *Runtime) Close() {
 		for _, job := range jobs {
 			job.timer.Stop()
 		}
-		if rt.mode == modePrimary && rt.deps.MCP != nil {
+		if rt.deps.MCP != nil {
 			rt.deps.MCP.CloseOwner(rt.owner)
 		}
 		close(rt.done)
 	})
 }
 
-func (rt *Runtime) poolEnabled() bool {
-	return rt.mode == modePrimary && rt.manifest.Workers > 0
-}
-
-func (rt *Runtime) ensureWorkerPool(ctx context.Context) []*Runtime {
-	if !rt.poolEnabled() {
-		return nil
-	}
-
-	rt.workerMu.Lock()
-	defer rt.workerMu.Unlock()
-
-	if rt.workers != nil {
-		return rt.workers
-	}
-	if rt.workersFailed {
-		return nil
-	}
-
-	deps := rt.deps
-	deps.Bus = nil
-	deps.Router = nil
-	deps.Registry = nil
-	deps.Plugins = nil
-
-	startCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	workers := make([]*Runtime, 0, rt.manifest.Workers)
-	for i := 0; i < rt.manifest.Workers; i++ {
-		worker, err := startRuntime(startCtx, rt.dir, rt.manifest, deps, modeWorker)
-		if err != nil {
-			for _, started := range workers {
-				started.Close()
-			}
-			rt.workersFailed = true
-			rt.logScope.Warn("Failed to start worker VM %d: %v", i+1, err)
-			return nil
-		}
-		workers = append(workers, worker)
-	}
-	rt.workerFree = make(chan *Runtime, len(workers))
-	for _, worker := range workers {
-		rt.workerFree <- worker
-	}
-	rt.workers = workers
-	rt.logScope.Debug("Started %d worker VMs", len(workers))
-	return workers
-}
-
-// errNoWorkers reports that the plugin has no usable worker VMs.
-var errNoWorkers = errors.New("plugin has no worker VMs")
-
-// acquireWorker takes a free worker VM, waiting for one when all are busy.
-func (rt *Runtime) acquireWorker(ctx context.Context) (*Runtime, error) {
-	workers := rt.ensureWorkerPool(ctx)
-	if len(workers) == 0 {
-		return nil, errNoWorkers
-	}
-	select {
-	case <-rt.done:
-		return nil, fmt.Errorf("plugin %q is stopped", rt.manifest.ID)
-	default:
-	}
-	select {
-	case worker := <-rt.workerFree:
-		return worker, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-rt.done:
-		return nil, fmt.Errorf("plugin %q is stopped", rt.manifest.ID)
-	}
-}
-
-// releaseWorker returns a worker VM to the pool unless it has stopped.
-func (rt *Runtime) releaseWorker(worker *Runtime) {
-	if worker == nil {
-		return
-	}
-	select {
-	case <-worker.done:
-		return
-	default:
-	}
-	select {
-	case rt.workerFree <- worker:
-	default:
-	}
-}
-
 func (rt *Runtime) runComplete(ctx context.Context, completeFn goja.Callable, req CompleteRequest, onStream func(StreamEvent)) (*CompleteResponse, error) {
 	if completeFn == nil {
 		return nil, fmt.Errorf("provider %q has no complete handler", rt.manifest.ID)
 	}
-	val, err := rt.execOnVM(ctx, func(vm *goja.Runtime) (any, error) {
+	val, err := rt.callResult(ctx, func(vm *goja.Runtime) (goja.Value, error) {
 		emitFn := func(ev map[string]any) {
 			if onStream == nil {
 				return
@@ -338,11 +223,7 @@ func (rt *Runtime) runComplete(ctx context.Context, completeFn goja.Callable, re
 				onStream(se)
 			}
 		}
-		res, callErr := completeFn(goja.Undefined(), vm.ToValue(req), vm.ToValue(emitFn))
-		if callErr != nil {
-			return nil, callErr
-		}
-		return res.Export(), nil
+		return completeFn(goja.Undefined(), vm.ToValue(req), vm.ToValue(emitFn))
 	})
 	if err != nil {
 		return nil, err
@@ -358,57 +239,34 @@ func (rt *Runtime) runComplete(ctx context.Context, completeFn goja.Callable, re
 	return &resp, nil
 }
 
-func (rt *Runtime) completeInWorker(ctx context.Context, req CompleteRequest, onStream func(StreamEvent)) (*CompleteResponse, error, bool) {
-	worker, err := rt.acquireWorker(ctx)
-	if err != nil {
-		if errors.Is(err, errNoWorkers) {
-			return nil, nil, false
-		}
-		return nil, err, true
-	}
-	defer rt.releaseWorker(worker)
-	if worker.workerComplete == nil {
-		return nil, nil, false
-	}
-	resp, err := worker.runComplete(ctx, worker.workerComplete, req, onStream)
-	return resp, err, true
-}
-
 func (rt *Runtime) runTool(ctx context.Context, fn goja.Callable, args map[string]any) (any, error) {
-	return rt.execOnVM(ctx, func(vm *goja.Runtime) (any, error) {
-		res, callErr := fn(goja.Undefined(), vm.ToValue(args))
-		if callErr != nil {
-			return nil, callErr
-		}
-		return res.Export(), nil
+	return rt.callResult(ctx, func(vm *goja.Runtime) (goja.Value, error) {
+		return fn(goja.Undefined(), vm.ToValue(args))
 	})
-}
-
-func (rt *Runtime) toolInWorker(ctx context.Context, name string, args map[string]any) (any, error, bool) {
-	worker, err := rt.acquireWorker(ctx)
-	if err != nil {
-		if errors.Is(err, errNoWorkers) {
-			return nil, nil, false
-		}
-		return nil, err, true
-	}
-	defer rt.releaseWorker(worker)
-	fn := worker.workerTools[name]
-	if fn == nil {
-		return nil, nil, false
-	}
-	res, err := worker.runTool(ctx, fn, args)
-	return res, err, true
 }
 
 func (rt *Runtime) loop() {
 	vm := goja.New()
 	vm.SetFieldNameMapper(goja.TagFieldNameMapper("json", true))
+	vm.SetAsyncContextTracker(&ctxTracker{rt: rt})
+	vm.SetPromiseRejectionTracker(func(p *goja.Promise, op goja.PromiseRejectionOperation) {
+		if op == goja.PromiseRejectionReject {
+			rt.logScope.Warn("Unhandled promise rejection: %v", p.Result())
+		}
+	})
 
 	for {
 		select {
 		case <-rt.done:
 			return
+		case job := <-rt.jobs:
+			_, err := safeRun(vm, func(vm *goja.Runtime) (any, error) {
+				job(vm)
+				return nil, nil
+			})
+			if err != nil {
+				rt.logScope.Warn("Async job failed: %v", err)
+			}
 		case cmd := <-rt.cmds:
 			select {
 			case <-cmd.expired:
@@ -479,9 +337,9 @@ func (rt *Runtime) execOnVM(ctx context.Context, fn func(vm *goja.Runtime) (any,
 	}
 }
 
-// scheduleAfter runs a callback on the plugin control VM after the delay.
+// scheduleAfter runs a callback on the plugin VM after the delay.
 func (rt *Runtime) scheduleAfter(ms int, fn goja.Callable) bool {
-	if rt.mode != modePrimary || fn == nil {
+	if fn == nil {
 		return false
 	}
 	delay := time.Duration(ms) * time.Millisecond
@@ -495,14 +353,12 @@ func (rt *Runtime) scheduleAfter(ms int, fn goja.Callable) bool {
 	job := &afterJob{done: make(chan struct{})}
 	job.timer = time.AfterFunc(delay, func() {
 		defer close(job.done)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(rt.ctx, 2*time.Minute)
 		defer cancel()
-		_, err := rt.execOnVM(ctx, func(vm *goja.Runtime) (any, error) {
-			_, callErr := fn(goja.Undefined())
-			return nil, callErr
-		})
-		if err != nil {
-			rt.logScope.Debug("Deferred callback failed: %v", err)
+		if _, err := rt.callResult(ctx, func(vm *goja.Runtime) (goja.Value, error) {
+			return fn(goja.Undefined())
+		}); err != nil {
+			rt.logScope.Warn("Deferred callback failed: %v", err)
 		}
 	})
 
@@ -524,21 +380,10 @@ func (rt *Runtime) bindCDX(vm *goja.Runtime) {
 	cdxObj := vm.NewObject()
 	_ = cdxObj.Set("id", rt.manifest.ID)
 	_ = cdxObj.Set("dir", rt.dir)
-	_ = cdxObj.Set("worker", rt.mode == modeWorker)
 	_ = cdxObj.Set("workdir", func() string { return WorkdirFromContext(rt.currentCtx()) })
-	_ = cdxObj.Set("inWorker", func(call goja.FunctionCall) goja.Value {
-		if len(call.Arguments) == 0 {
-			panic(vm.NewTypeError("cdx.inWorker requires a function"))
-		}
-		if _, ok := goja.AssertFunction(call.Arguments[0]); !ok {
-			panic(vm.NewTypeError("cdx.inWorker requires a function"))
-		}
-		obj := vm.NewObject()
-		_ = obj.Set(workerFunctionFlag, true)
-		_ = obj.Set("fn", call.Arguments[0])
-		return obj
-	})
 	_ = cdxObj.Set("after", func(ms int, fn goja.Callable) bool { return rt.scheduleAfter(ms, fn) })
+	_ = cdxObj.Set("yield", func() goja.Value { return rt.yield(vm) })
+	_ = cdxObj.Set("sleep", func(ms int) goja.Value { return rt.sleep(vm, ms) })
 	_ = cdxObj.Set("apiDoc", RenderAPIDoc)
 	_ = cdxObj.Set("log", rt.buildLogObject(vm))
 	_ = cdxObj.Set("storage", rt.buildStorageObject(vm))
@@ -551,6 +396,7 @@ func (rt *Runtime) bindCDX(vm *goja.Runtime) {
 	_ = cdxObj.Set("http", rt.buildHTTPObject(vm, ""))
 	_ = cdxObj.Set("ui", rt.buildUIObject(vm))
 	_ = cdxObj.Set("tools", rt.buildToolsObject(vm))
+	_ = cdxObj.Set("tasks", rt.buildTasksObject(vm))
 	_ = cdxObj.Set("providers", rt.buildProvidersObject(vm))
 	_ = cdxObj.Set("plugins", rt.buildPluginsObject(vm))
 	_ = cdxObj.Set("mcp", rt.buildMCPObject(vm))
@@ -801,10 +647,12 @@ func (rt *Runtime) buildBusObject(vm *goja.Runtime) *goja.Object {
 			return
 		}
 		rt.deps.Bus.Subscribe(rt.owner, topic, func(ctx context.Context, payload any) {
-			_, _ = rt.execOnVM(ctx, func(vm *goja.Runtime) (any, error) {
-				_, err := fn(goja.Undefined(), vm.ToValue(payload))
-				return nil, err
+			_, err := rt.callResult(ctx, func(vm *goja.Runtime) (goja.Value, error) {
+				return fn(goja.Undefined(), vm.ToValue(payload))
 			})
+			if err != nil {
+				rt.logScope.Warn("Bus subscriber %q failed: %v", topic, err)
+			}
 		})
 	})
 	_ = obj.Set("handle", func(topic string, fn goja.Callable) {
@@ -812,12 +660,8 @@ func (rt *Runtime) buildBusObject(vm *goja.Runtime) *goja.Object {
 			return
 		}
 		rt.deps.Bus.Handle(rt.owner, topic, func(ctx context.Context, payload any) (any, error) {
-			return rt.execOnVM(ctx, func(vm *goja.Runtime) (any, error) {
-				res, err := fn(goja.Undefined(), vm.ToValue(payload))
-				if err != nil {
-					return nil, err
-				}
-				return res.Export(), nil
+			return rt.callResult(ctx, func(vm *goja.Runtime) (goja.Value, error) {
+				return fn(goja.Undefined(), vm.ToValue(payload))
 			})
 		})
 	})
@@ -838,6 +682,9 @@ func (rt *Runtime) currentCtx() context.Context {
 	if rt.activeCtx != nil {
 		return rt.activeCtx
 	}
+	if rt.ctx != nil {
+		return rt.ctx
+	}
 	return context.Background()
 }
 
@@ -848,15 +695,15 @@ func (rt *Runtime) buildHooksObject(vm *goja.Runtime) *goja.Object {
 			return
 		}
 		rt.deps.Bus.OnHook(rt.owner, hookName, priority, func(ctx context.Context, payload map[string]any) (map[string]any, error) {
-			val, err := rt.execOnVM(ctx, func(vm *goja.Runtime) (any, error) {
+			val, err := rt.callResult(ctx, func(vm *goja.Runtime) (goja.Value, error) {
 				res, callErr := fn(goja.Undefined(), vm.ToValue(payload))
 				if callErr != nil {
 					return nil, callErr
 				}
 				if res == nil || goja.IsUndefined(res) || goja.IsNull(res) {
-					return payload, nil
+					return vm.ToValue(payload), nil
 				}
-				return res.Export(), nil
+				return res, nil
 			})
 			if err != nil {
 				return nil, err
@@ -871,7 +718,7 @@ func (rt *Runtime) buildHooksObject(vm *goja.Runtime) *goja.Object {
 		if rt.deps.Bus == nil {
 			return payload
 		}
-		out, err := rt.deps.Bus.RunHook(context.Background(), hookName, payload)
+		out, err := rt.deps.Bus.RunHook(rt.currentCtx(), hookName, payload)
 		if err != nil {
 			panic(vm.NewGoError(err))
 		}
@@ -880,10 +727,10 @@ func (rt *Runtime) buildHooksObject(vm *goja.Runtime) *goja.Object {
 	return obj
 }
 
-// buildQuestionsObject exposes the client question broker to plugins, including worker VMs.
+// buildQuestionsObject exposes the client question broker to plugins.
 func (rt *Runtime) buildQuestionsObject(vm *goja.Runtime) *goja.Object {
 	obj := vm.NewObject()
-	_ = obj.Set("ask", func(raw map[string]any) map[string]any {
+	_ = obj.Set("ask", func(raw map[string]any) goja.Value {
 		data, err := json.Marshal(raw)
 		if err != nil {
 			panic(vm.NewGoError(err))
@@ -898,24 +745,26 @@ func (rt *Runtime) buildQuestionsObject(vm *goja.Runtime) *goja.Object {
 		if strings.TrimSpace(q.Kind) == "" {
 			q.Kind = "custom"
 		}
-		answer, err := question.Ask(rt.currentCtx(), q)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return map[string]any{
-			"choice":    answer.Choice,
-			"text":      answer.Text,
-			"cancelled": answer.Cancelled,
-			"reason":    answer.Reason,
-		}
+		return rt.async(vm, nil, func(ctx context.Context) (any, error) {
+			answer, askErr := question.Ask(ctx, q)
+			if askErr != nil {
+				return nil, askErr
+			}
+			return map[string]any{
+				"choice":    answer.Choice,
+				"text":      answer.Text,
+				"cancelled": answer.Cancelled,
+				"reason":    answer.Reason,
+			}, nil
+		})
 	})
 	return obj
 }
 
-// buildAgentsObject exposes delegated turns to plugins, including worker VMs.
+// buildAgentsObject exposes delegated turns to plugins.
 func (rt *Runtime) buildAgentsObject(vm *goja.Runtime) *goja.Object {
 	obj := vm.NewObject()
-	_ = obj.Set("run", func(raw map[string]any) map[string]any {
+	_ = obj.Set("run", func(raw map[string]any) goja.Value {
 		if rt.deps.Agents == nil {
 			panic(vm.NewGoError(errors.New("subagents are not available")))
 		}
@@ -932,19 +781,21 @@ func (rt *Runtime) buildAgentsObject(vm *goja.Runtime) *goja.Object {
 		}
 		req.MaxSteps = agentMaxSteps(raw["max_steps"])
 
-		result, err := rt.deps.Agents.RunChild(rt.currentCtx(), req)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return map[string]any{
-			"session_id":     result.SessionID,
-			"content":        result.Content,
-			"steps":          result.Steps,
-			"stopped_reason": result.StoppedReason,
-			"usage":          result.Usage,
-		}
+		return rt.async(vm, nil, func(ctx context.Context) (any, error) {
+			result, runErr := rt.deps.Agents.RunChild(ctx, req)
+			if runErr != nil {
+				return nil, runErr
+			}
+			return map[string]any{
+				"session_id":     result.SessionID,
+				"content":        result.Content,
+				"steps":          result.Steps,
+				"stopped_reason": result.StoppedReason,
+				"usage":          result.Usage,
+			}, nil
+		})
 	})
-	_ = obj.Set("runMany", func(raw map[string]any) map[string]any {
+	_ = obj.Set("runMany", func(raw map[string]any) goja.Value {
 		if rt.deps.Agents == nil {
 			panic(vm.NewGoError(errors.New("subagents are not available")))
 		}
@@ -967,21 +818,23 @@ func (rt *Runtime) buildAgentsObject(vm *goja.Runtime) *goja.Object {
 			panic(vm.NewGoError(fmt.Errorf("at most %d subagent tasks are allowed", MaxAgentTasks)))
 		}
 
-		results, err := rt.deps.Agents.RunChildren(rt.currentCtx(), reqs)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		out := make([]map[string]any, 0, len(results))
-		for _, result := range results {
-			out = append(out, map[string]any{
-				"session_id":     result.SessionID,
-				"content":        result.Content,
-				"steps":          result.Steps,
-				"stopped_reason": result.StoppedReason,
-				"error":          result.Error,
-			})
-		}
-		return map[string]any{"results": out}
+		return rt.async(vm, nil, func(ctx context.Context) (any, error) {
+			results, runErr := rt.deps.Agents.RunChildren(ctx, reqs)
+			if runErr != nil {
+				return nil, runErr
+			}
+			out := make([]map[string]any, 0, len(results))
+			for _, result := range results {
+				out = append(out, map[string]any{
+					"session_id":     result.SessionID,
+					"content":        result.Content,
+					"steps":          result.Steps,
+					"stopped_reason": result.StoppedReason,
+					"error":          result.Error,
+				})
+			}
+			return map[string]any{"results": out}, nil
+		})
 	})
 	return obj
 }
@@ -997,6 +850,31 @@ func agentMaxSteps(value any) int {
 		return v
 	}
 	return 0
+}
+
+// ginWriter serializes the plugin handler with the request goroutine. When the
+// client goes away the command keeps running on the VM, and a write to a gin
+// context that the HTTP server already finished would race with its own reply.
+type ginWriter struct {
+	mu   sync.Mutex
+	done bool
+}
+
+// run executes one response write unless the request already finished.
+func (w *ginWriter) run(fn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.done {
+		return
+	}
+	fn()
+}
+
+// finish marks the request as answered, waiting for a write in flight.
+func (w *ginWriter) finish() {
+	w.mu.Lock()
+	w.done = true
+	w.mu.Unlock()
 }
 
 func (rt *Runtime) buildHTTPObject(vm *goja.Runtime, groupPrefix string) *goja.Object {
@@ -1015,11 +893,12 @@ func (rt *Runtime) buildHTTPObject(vm *goja.Runtime, groupPrefix string) *goja.O
 		}
 		fullPattern := joinPath(pattern)
 		rt.deps.Router.Handle(rt.owner, method, fullPattern, func(c *gin.Context) {
-			_, err := rt.execOnVM(c.Request.Context(), func(vm *goja.Runtime) (any, error) {
-				ctxObj := rt.buildGinContextObject(vm, c)
-				_, callErr := fn(goja.Undefined(), ctxObj)
-				return nil, callErr
+			writer := &ginWriter{}
+			_, err := rt.callResult(c.Request.Context(), func(vm *goja.Runtime) (goja.Value, error) {
+				ctxObj := rt.buildGinContextObject(vm, c, writer)
+				return fn(goja.Undefined(), ctxObj)
 			})
+			writer.finish()
 			if err != nil && !c.Writer.Written() {
 				writePluginError(c, rt.manifest.ID, err)
 			}
@@ -1049,14 +928,15 @@ func (rt *Runtime) buildHTTPObject(vm *goja.Runtime, groupPrefix string) *goja.O
 			panic(vm.NewTypeError("middleware handler must be a function"))
 		}
 		rt.deps.Router.Use(rt.owner, prefix, func(c *gin.Context) {
-			_, err := rt.execOnVM(c.Request.Context(), func(vm *goja.Runtime) (any, error) {
-				ctxObj := rt.buildGinContextObject(vm, c)
+			writer := &ginWriter{}
+			_, err := rt.callResult(c.Request.Context(), func(vm *goja.Runtime) (goja.Value, error) {
+				ctxObj := rt.buildGinContextObject(vm, c, writer)
 				_ = ctxObj.Set("next", func() {
 					// Deferred until the VM command finishes so downstream handlers in the same plugin can acquire the VM without deadlock.
 				})
-				_, callErr := fn(goja.Undefined(), ctxObj)
-				return nil, callErr
+				return fn(goja.Undefined(), ctxObj)
 			})
+			writer.finish()
 			if err != nil && !c.Writer.Written() {
 				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": pluginErrorMessage(rt.manifest.ID, err)})
 				return
@@ -1102,7 +982,7 @@ func pluginErrorMessage(pluginID string, err error) string {
 	return err.Error()
 }
 
-func (rt *Runtime) buildGinContextObject(vm *goja.Runtime, c *gin.Context) *goja.Object {
+func (rt *Runtime) buildGinContextObject(vm *goja.Runtime, c *gin.Context, writer *ginWriter) *goja.Object {
 	ctxObj := vm.NewObject()
 	_ = ctxObj.Set("method", c.Request.Method)
 	_ = ctxObj.Set("path", c.Request.URL.Path)
@@ -1110,8 +990,8 @@ func (rt *Runtime) buildGinContextObject(vm *goja.Runtime, c *gin.Context) *goja
 	_ = ctxObj.Set("query", func(name string) string { return c.Query(name) })
 	_ = ctxObj.Set("getHeader", func(name string) string { return c.GetHeader(name) })
 	_ = ctxObj.Set("host", func() string { return c.Request.Host })
-	_ = ctxObj.Set("header", func(k, v string) { c.Header(k, v) })
-	_ = ctxObj.Set("status", func(code int) { c.Status(code) })
+	_ = ctxObj.Set("header", func(k, v string) { writer.run(func() { c.Header(k, v) }) })
+	_ = ctxObj.Set("status", func(code int) { writer.run(func() { c.Status(code) }) })
 	_ = ctxObj.Set("set", func(k string, v any) { c.Set(k, v) })
 	_ = ctxObj.Set("get", func(k string) any {
 		val, ok := c.Get(k)
@@ -1136,19 +1016,19 @@ func (rt *Runtime) buildGinContextObject(vm *goja.Runtime, c *gin.Context) *goja
 		return out
 	})
 	_ = ctxObj.Set("json", func(code int, v any) {
-		c.JSON(code, v)
+		writer.run(func() { c.JSON(code, v) })
 	})
 	_ = ctxObj.Set("string", func(code int, s string) {
-		c.String(code, "%s", s)
+		writer.run(func() { c.String(code, "%s", s) })
 	})
 	_ = ctxObj.Set("html", func(code int, htmlStr string) {
-		c.Data(code, "text/html; charset=utf-8", []byte(htmlStr))
+		writer.run(func() { c.Data(code, "text/html; charset=utf-8", []byte(htmlStr)) })
 	})
 	_ = ctxObj.Set("abortWithJSON", func(code int, v any) {
-		c.AbortWithStatusJSON(code, v)
+		writer.run(func() { c.AbortWithStatusJSON(code, v) })
 	})
 	_ = ctxObj.Set("next", func() {
-		c.Next()
+		writer.run(func() { c.Next() })
 	})
 	return ctxObj
 }
@@ -1222,25 +1102,12 @@ func (rt *Runtime) buildToolsObject(vm *goja.Runtime) *goja.Object {
 	obj := vm.NewObject()
 	_ = obj.Set("register", func(specMap map[string]any, handler goja.Value) {
 		name, _ := specMap["name"].(string)
-		fn, runInWorker := unwrapWorkerFunction(handler)
-		if fn == nil {
+		fn, ok := goja.AssertFunction(handler)
+		if !ok || fn == nil {
 			panic(vm.NewTypeError("tool handler must be a function"))
-		}
-		if rt.mode == modeWorker {
-			if name == "" {
-				return
-			}
-			if rt.workerTools == nil {
-				rt.workerTools = map[string]goja.Callable{}
-			}
-			rt.workerTools[name] = fn
-			return
 		}
 		if rt.deps.Registry == nil {
 			return
-		}
-		if runInWorker && rt.manifest.Workers == 0 {
-			rt.logScope.Warn("Tool %s is marked with cdx.inWorker but workers are disabled; using the control VM", name)
 		}
 		desc, _ := specMap["description"].(string)
 		perm, _ := specMap["permission"].(string)
@@ -1256,11 +1123,6 @@ func (rt *Runtime) buildToolsObject(vm *goja.Runtime) *goja.Object {
 			Permission:  perm,
 			InputSchema: inSchema,
 			handler: func(ctx context.Context, args map[string]any) (any, error) {
-				if runInWorker && rt.poolEnabled() {
-					if res, err, ok := rt.toolInWorker(ctx, name, args); ok {
-						return res, err
-					}
-				}
 				return rt.runTool(ctx, fn, args)
 			},
 		})
@@ -1269,7 +1131,7 @@ func (rt *Runtime) buildToolsObject(vm *goja.Runtime) *goja.Object {
 		}
 	})
 	_ = obj.Set("remove", func(name string) bool {
-		if rt.mode == modeWorker || rt.deps.Registry == nil {
+		if rt.deps.Registry == nil {
 			return false
 		}
 		return rt.deps.Registry.RemoveTool(name)
@@ -1280,7 +1142,126 @@ func (rt *Runtime) buildToolsObject(vm *goja.Runtime) *goja.Object {
 		}
 		return rt.deps.Registry.ListTools()
 	})
+	_ = obj.Set("call", func(name string, args map[string]any, opts map[string]any) goja.Value {
+		if rt.deps.Tools == nil {
+			panic(vm.NewGoError(errors.New("tool execution is not available")))
+		}
+		if strings.TrimSpace(name) == "" {
+			panic(vm.NewGoError(errors.New("tool name is required")))
+		}
+		call := ToolCall{Name: name, Arguments: args}
+		if opts != nil {
+			if value, ok := opts["session_id"].(string); ok {
+				call.SessionID = value
+			}
+			if value, ok := opts["root_session_id"].(string); ok {
+				call.RootID = value
+			}
+			if value, ok := opts["workdir"].(string); ok {
+				call.Workdir = value
+			}
+			call.Depth = agentMaxSteps(opts["depth"])
+		}
+		if call.SessionID == "" {
+			call.SessionID = "plugin:" + rt.manifest.ID
+		}
+		return rt.async(vm, nil, func(ctx context.Context) (any, error) {
+			output, runErr := rt.deps.Tools.RunTool(ctx, call)
+			result := map[string]any{"output": output}
+			if runErr != nil {
+				result["error"] = runErr.Error()
+			}
+			return result, nil
+		})
+	})
 	return obj
+}
+
+// buildTasksObject exposes background turns to plugins.
+func (rt *Runtime) buildTasksObject(vm *goja.Runtime) *goja.Object {
+	obj := vm.NewObject()
+	runner := func() TaskRunner {
+		if rt.deps.Tasks == nil {
+			panic(vm.NewGoError(errors.New("background tasks are not available")))
+		}
+		return rt.deps.Tasks
+	}
+	_ = obj.Set("start", func(raw map[string]any) map[string]any {
+		if raw == nil {
+			panic(vm.NewGoError(errors.New("task options are required")))
+		}
+		req := TaskRequest{
+			Prompt:         jsString(raw["prompt"]),
+			Workdir:        jsString(raw["workdir"]),
+			Preset:         jsString(raw["preset"]),
+			Model:          jsString(raw["model"]),
+			Owner:          jsString(raw["owner"]),
+			MaxSteps:       agentMaxSteps(raw["max_steps"]),
+			TimeoutSeconds: agentMaxSteps(raw["timeout_s"]),
+		}
+		if list, ok := raw["allowed_tools"].([]any); ok {
+			for _, item := range list {
+				if name, ok := item.(string); ok && name != "" {
+					req.AllowedTools = append(req.AllowedTools, name)
+				}
+			}
+		}
+		info, err := runner().StartTask(rt.currentCtx(), req)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return map[string]any{"task_id": info.ID, "session_id": info.SessionID}
+	})
+	_ = obj.Set("get", func(id string) map[string]any {
+		info, ok := runner().GetTask(rt.currentCtx(), id)
+		if !ok {
+			return map[string]any{"found": false}
+		}
+		return taskInfoMap(info)
+	})
+	_ = obj.Set("list", func() []map[string]any {
+		infos := runner().ListTasks(rt.currentCtx())
+		out := make([]map[string]any, 0, len(infos))
+		for _, info := range infos {
+			out = append(out, taskInfoMap(info))
+		}
+		return out
+	})
+	_ = obj.Set("answer", func(id, questionID string, answer map[string]any) map[string]any {
+		if err := runner().AnswerTask(rt.currentCtx(), id, questionID, answer); err != nil {
+			return map[string]any{"ok": false, "error": err.Error()}
+		}
+		return map[string]any{"ok": true}
+	})
+	_ = obj.Set("cancel", func(id string) map[string]any {
+		if err := runner().CancelTask(rt.currentCtx(), id); err != nil {
+			return map[string]any{"ok": false, "error": err.Error()}
+		}
+		return map[string]any{"ok": true}
+	})
+	return obj
+}
+
+// taskInfoMap converts one task snapshot into a JavaScript object.
+func taskInfoMap(info TaskInfo) map[string]any {
+	out := map[string]any{
+		"found":          true,
+		"task_id":        info.ID,
+		"session_id":     info.SessionID,
+		"status":         info.Status,
+		"result":         info.Result,
+		"stopped_reason": info.StoppedReason,
+		"error":          info.Error,
+	}
+	if info.Question != nil {
+		out["question"] = map[string]any{
+			"id":    info.Question.ID,
+			"kind":  info.Question.Kind,
+			"title": info.Question.Title,
+			"body":  info.Question.Body,
+		}
+	}
+	return out
 }
 
 func (rt *Runtime) buildProvidersObject(vm *goja.Runtime) *goja.Object {
@@ -1289,20 +1270,10 @@ func (rt *Runtime) buildProvidersObject(vm *goja.Runtime) *goja.Object {
 		if specObj == nil {
 			return
 		}
-		listFn, listInWorker := unwrapWorkerFunction(specObj.Get("listModels"))
-		completeFn, completeInWorker := unwrapWorkerFunction(specObj.Get("complete"))
-		if rt.mode == modeWorker {
-			rt.workerComplete = completeFn
-			return
-		}
+		listFn, _ := goja.AssertFunction(specObj.Get("listModels"))
+		completeFn, _ := goja.AssertFunction(specObj.Get("complete"))
 		if rt.deps.Registry == nil {
 			return
-		}
-		if listInWorker {
-			rt.logScope.Warn("Provider listModels is marked with cdx.inWorker but always runs in the control VM")
-		}
-		if completeInWorker && rt.manifest.Workers == 0 {
-			rt.logScope.Warn("Provider complete is marked with cdx.inWorker but workers are disabled; using the control VM")
 		}
 
 		rt.deps.Registry.RegisterProvider(ProviderEntry{
@@ -1311,12 +1282,8 @@ func (rt *Runtime) buildProvidersObject(vm *goja.Runtime) *goja.Object {
 				if listFn == nil {
 					return nil, nil
 				}
-				val, err := rt.execOnVM(ctx, func(vm *goja.Runtime) (any, error) {
-					res, callErr := listFn(goja.Undefined())
-					if callErr != nil {
-						return nil, callErr
-					}
-					return res.Export(), nil
+				val, err := rt.callResult(ctx, func(vm *goja.Runtime) (goja.Value, error) {
+					return listFn(goja.Undefined())
 				})
 				if err != nil {
 					return nil, err
@@ -1332,21 +1299,21 @@ func (rt *Runtime) buildProvidersObject(vm *goja.Runtime) *goja.Object {
 				return models, nil
 			},
 			Complete: func(ctx context.Context, req CompleteRequest, onStream func(StreamEvent)) (*CompleteResponse, error) {
-				if completeInWorker && rt.poolEnabled() {
-					if resp, err, ok := rt.completeInWorker(ctx, req, onStream); ok {
-						return resp, err
-					}
-				}
 				return rt.runComplete(ctx, completeFn, req, onStream)
 			},
 		})
 	})
-	_ = obj.Set("listModels", func() []ModelInfo {
+	_ = obj.Set("listModels", func() goja.Value {
 		if rt.deps.Registry == nil {
-			return nil
+			return vm.ToValue([]ModelInfo{})
 		}
-		m, _ := rt.deps.Registry.ListModels(context.Background())
-		return m
+		return rt.async(vm, nil, func(ctx context.Context) (any, error) {
+			models, err := rt.deps.Registry.ListModels(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return models, nil
+		})
 	})
 	return obj
 }
@@ -1428,16 +1395,13 @@ func (rt *Runtime) buildSysObject(vm *goja.Runtime) *goja.Object {
 	_ = obj.Set("env", func(name string) string {
 		return rt.deps.Sys.Env(name)
 	})
-	_ = obj.Set("exec", func(command string, workdir string, timeoutMS int) map[string]any {
-		ctx := rt.currentCtx()
-		if workdir == "" {
-			workdir = WorkdirFromContext(ctx)
-		}
-		res, err := rt.deps.Sys.Exec(ctx, command, workdir, timeoutMS)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return res
+	_ = obj.Set("exec", func(command string, workdir string, timeoutMS int) goja.Value {
+		return rt.async(vm, rt.deps.AsyncExec, func(ctx context.Context) (any, error) {
+			if workdir == "" {
+				workdir = WorkdirFromContext(ctx)
+			}
+			return rt.deps.Sys.Exec(ctx, command, workdir, timeoutMS)
+		})
 	})
 	_ = obj.Set("fetch", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) == 0 {
@@ -1451,20 +1415,30 @@ func (rt *Runtime) buildSysObject(vm *goja.Runtime) *goja.Object {
 		if opts == nil {
 			opts = map[string]any{}
 		}
-		var onLine func(string) error
+		var onLine goja.Callable
 		if len(call.Arguments) > 2 {
-			if fn, ok := goja.AssertFunction(call.Arguments[2]); ok {
-				onLine = func(line string) error {
-					_, err := fn(goja.Undefined(), vm.ToValue(line))
-					return err
+			onLine, _ = goja.AssertFunction(call.Arguments[2])
+		}
+		return rt.async(vm, rt.deps.Async, func(ctx context.Context) (any, error) {
+			return rt.deps.Sys.Fetch(ctx, url, opts, func(line string) error {
+				if onLine == nil {
+					return nil
 				}
-			}
-		}
-		res, err := rt.deps.Sys.Fetch(rt.currentCtx(), url, opts, onLine)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return vm.ToValue(res)
+				matched := make(chan error, 1)
+				rt.post(func(vm *goja.Runtime) {
+					_, err := onLine(goja.Undefined(), vm.ToValue(line))
+					matched <- err
+				})
+				select {
+				case err := <-matched:
+					return err
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-rt.done:
+					return fmt.Errorf("plugin %q is stopped", rt.manifest.ID)
+				}
+			})
+		})
 	})
 	return obj
 }

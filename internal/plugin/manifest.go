@@ -29,7 +29,6 @@ type Manifest struct {
 	SourceURL     string `json:"source_url,omitempty"`
 	Entry         string `json:"entry"`
 	Order         int    `json:"order,omitempty"`
-	Workers       int    `json:"workers,omitempty"` // Number of isolated VMs for long-running provider and tool calls.
 }
 
 // LoadManifest reads and validates manifest.json from a plugin directory.
@@ -69,9 +68,6 @@ func (m *Manifest) Validate(dir string) error {
 	}
 	if m.MinCDXVersion != "" && !reSemver.MatchString(strings.TrimPrefix(m.MinCDXVersion, "v")) {
 		return fmt.Errorf("min_cdx_version %q: expected semantic version MAJOR.MINOR.PATCH", m.MinCDXVersion)
-	}
-	if m.Workers < 0 || m.Workers > 16 {
-		return fmt.Errorf("workers %d: expected a value between 0 and 16", m.Workers)
 	}
 	if filepath.IsAbs(m.Entry) || strings.Contains(m.Entry, "..") {
 		return fmt.Errorf("entry %q: must be a relative path inside the plugin directory", m.Entry)

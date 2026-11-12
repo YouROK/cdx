@@ -235,6 +235,11 @@ resources are available through `mcp_list_resources` and `mcp_read_resource`.
 Server requests such as elicitation become normal cdx questions, and both the
 modern `2026-07-28` revision and the earlier handshake-based ones are supported.
 
+The `mcp-server` plugin works in the opposite direction: it serves this daemon's tools to
+another agent over `/mcp`, with a token per client. It speaks both protocol revisions, and a modern
+client answers an approval question in band. Its page sets read, edit, dangerous, and task
+permissions per client, and the legacy flow waits there for a decision. See `MCP-SERVER.md`.
+
 ## Plugins
 
 | Plugin | Role |
@@ -246,6 +251,7 @@ modern `2026-07-28` revision and the earlier handshake-based ones are supported.
 | `context` | System prompt, `AGENTS.md`, history compaction |
 | `tools-local` | Filesystem and shell tools |
 | `mcp` | Model Context Protocol servers and their tools |
+| `mcp-server` | Serves this daemon's tools to other agents over MCP |
 | `webui` | Dashboard shell: navigation, schema forms, page panels |
 
 `PLUGINS.md` documents the manifest, the `cdx` host API, and both kinds of

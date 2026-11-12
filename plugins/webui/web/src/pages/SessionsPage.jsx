@@ -195,9 +195,17 @@ export function SessionsPage({ sessionId, onOpen, onLive, onBack }) {
   );
 }
 
+// The full origin ("mcp:<client>") is long and does not fit the row, so the
+// list shows its scheme and keeps the value in the tooltip.
+function originLabel(origin) {
+  const scheme = String(origin || "").split(":")[0];
+  return scheme ? scheme.toUpperCase() : "";
+}
+
 function kindLabel(session, ttl, t) {
   if (session.kind === "persistent") return t("webui.Sessions.KindPersistent");
   if (session.kind === "subagent") return t("webui.Sessions.KindSubagent");
+  if (session.kind === "task") return t("webui.Sessions.KindTask");
   return t("webui.Sessions.KindTemp", { hours: ttl });
 }
 
@@ -240,9 +248,16 @@ function SessionRow({
             </div>
             <div className="mono text-xs muted sess-id">{session.id}</div>
           </div>
-          <span className={session.kind === "persistent" ? "badge badge-teal" : "badge badge-accent"}>
-            {kindLabel(session, ttl, t)}
-          </span>
+          <div className="row-gap-xs">
+            {session.origin ? (
+              <span className="badge badge-muted" title={t("webui.Session.Remote") + ": " + session.origin}>
+                {originLabel(session.origin)}
+              </span>
+            ) : null}
+            <span className={session.kind === "persistent" ? "badge badge-teal" : "badge badge-accent"}>
+              {kindLabel(session, ttl, t)}
+            </span>
+          </div>
         </div>
       </td>
       <td className="mono text-xs muted sess-workdir" title={session.workdir}>{session.workdir}</td>
@@ -308,6 +323,11 @@ function SessionDetail({ detail, onBack, onLive, onOpen }) {
               >
                 {session.parent_id}
               </button>
+            </div>
+          ) : null}
+          {session.origin ? (
+            <div className="text-xs muted">
+              {t("webui.Session.Remote")}: <span className="mono">{session.origin}</span>
             </div>
           ) : null}
           {session.stopped_reason ? (

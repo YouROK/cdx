@@ -20,9 +20,9 @@ function setup(cdx) {
       },
       required: ["path"]
     }
-  }, cdx.inWorker(function(args) {
+  }, function(args) {
     return cdx.sys.readFile(resolvePath(args.path));
-  }));
+  });
 
   cdx.tools.register({
     name: "write_file",
@@ -36,11 +36,11 @@ function setup(cdx) {
       },
       required: ["path", "content"]
     }
-  }, cdx.inWorker(function(args) {
+  }, function(args) {
     var path = resolvePath(args.path);
     cdx.sys.writeFile(path, args.content);
     return { status: "written", path: path };
-  }));
+  });
 
   cdx.tools.register({
     name: "edit_file",
@@ -55,7 +55,7 @@ function setup(cdx) {
       },
       required: ["path", "old_string", "new_string"]
     }
-  }, cdx.inWorker(function(args) {
+  }, function(args) {
     var path = resolvePath(args.path);
     var content = cdx.sys.readFile(path);
     var idx = content.indexOf(args.old_string);
@@ -65,7 +65,7 @@ function setup(cdx) {
     var updated = content.slice(0, idx) + args.new_string + content.slice(idx + args.old_string.length);
     cdx.sys.writeFile(path, updated);
     return { status: "edited", path: path };
-  }));
+  });
 
   cdx.tools.register({
     name: "list_dir",
@@ -78,9 +78,9 @@ function setup(cdx) {
       },
       required: ["path"]
     }
-  }, cdx.inWorker(function(args) {
+  }, function(args) {
     return cdx.sys.readDir(resolvePath(args.path));
-  }));
+  });
 
   cdx.tools.register({
     name: "shell",
@@ -95,8 +95,8 @@ function setup(cdx) {
       },
       required: ["command"]
     }
-  }, cdx.inWorker(function(args) {
+  }, async function(args) {
     var dir = args.workdir ? resolvePath(args.workdir) : workdir();
-    return cdx.sys.exec(args.command, dir, args.timeout_ms || 60000);
-  }));
+    return await cdx.sys.exec(args.command, dir, args.timeout_ms || 60000);
+  });
 }

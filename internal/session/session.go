@@ -27,6 +27,7 @@ const (
 	KindTemp       = "temp"
 	KindPersistent = "persistent"
 	KindSubagent   = "subagent"
+	KindTask       = "task"
 	KindNone       = "none"
 )
 
@@ -60,7 +61,8 @@ type Message struct {
 type Session struct {
 	ID            string `json:"id"`
 	Workdir       string `json:"workdir"`
-	Kind          string `json:"kind"` // "temp", "persistent", or "subagent"
+	Kind          string `json:"kind"` // "temp", "persistent", "subagent", or "task"
+	Origin        string `json:"origin,omitempty"`
 	Title         string `json:"title,omitempty"`
 	Model         string `json:"model,omitempty"`
 	Summary       string `json:"summary,omitempty"`
@@ -93,6 +95,10 @@ type TurnRequest struct {
 	Preset    string // Optional preset override (--preset / -p).
 	Prompt    string
 	MaxSteps  int
+	// AllowedTools limits the tools offered in this turn; nil means no limit.
+	AllowedTools []string
+	// StepLimitMode overrides the stored mode for this turn.
+	StepLimitMode string
 }
 
 // TurnEvent is emitted during a turn (text deltas, reasoning deltas, tool starts/results).
@@ -892,7 +898,18 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 	if budget <= 0 {
 		budget = o.MaxSteps()
 	}
-	unlimited := o.StepLimitMode() == StepLimitNone
+	stepMode := o.StepLimitMode()
+	if req.StepLimitMode != "" {
+		stepMode = req.StepLimitMode
+	}
+	var allowedTools map[string]bool
+	if req.AllowedTools != nil {
+		allowedTools = make(map[string]bool, len(req.AllowedTools))
+		for _, name := range req.AllowedTools {
+			allowedTools[name] = true
+		}
+	}
+	unlimited := stepMode == StepLimitNone
 	if unlimited {
 		budget = 0
 	}
@@ -906,7 +923,7 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 
 			// Build raw message maps and tool specs for hooks and provider.
 			wireMsgs := messagesToMaps(history)
-			toolSpecs := o.buildToolDefs()
+			toolSpecs := o.buildToolDefs(allowedTools)
 			systemPrompt := ""
 
 			// 1. Run session:before_turn hooks (context plugin can set system_prompt, summary, or compact messages).
@@ -1007,55 +1024,24 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 					args = map[string]any{}
 				}
 
-				// Run tool:before_call hook (permissions plugin can allow, modify, or return error to deny).
-				if o.bus != nil {
-					spec, _ := o.registry.GetTool(toolName)
-					hookOut, hookErr := o.bus.RunHook(ctx, "tool:before_call", map[string]any{
-						"session_id":      sess.ID,
-						"root_session_id": rootID,
-						"depth":           sess.Depth,
-						"workdir":         sess.Workdir,
-						"tool":            toolName,
-						"permission":      spec.Permission,
-						"arguments":       args,
+				// Run the before hook and the approval question, then keep the approved arguments.
+				args, prepErr := o.PrepareToolCall(ctx, plugin.ToolCall{
+					SessionID: sess.ID,
+					RootID:    rootID,
+					Depth:     sess.Depth,
+					Workdir:   sess.Workdir,
+					Name:      toolName,
+					Arguments: args,
+				})
+				if prepErr != nil {
+					history = append(history, Message{
+						Role:       "tool",
+						Name:       toolName,
+						ToolCallID: callID,
+						Content:    fmt.Sprintf("error: %v", prepErr),
+						CreatedAt:  o.nowFn().Unix(),
 					})
-					if hookErr != nil {
-						toolErrStr := fmt.Sprintf("error: %v", hookErr)
-						history = append(history, Message{
-							Role:       "tool",
-							Name:       toolName,
-							ToolCallID: callID,
-							Content:    toolErrStr,
-							CreatedAt:  o.nowFn().Unix(),
-						})
-						continue
-					}
-					if modArgs, ok := hookOut["arguments"].(map[string]any); ok {
-						args = modArgs
-					}
-					if askRaw, ok := hookOut["ask"].(map[string]any); ok && len(askRaw) > 0 {
-						allowed, reason, askErr := o.askToolPermission(ctx, spec, sess.ID, sess.Workdir, toolName, args, askRaw)
-						if askErr != nil {
-							history = append(history, Message{
-								Role:       "tool",
-								Name:       toolName,
-								ToolCallID: callID,
-								Content:    fmt.Sprintf("error: %v", askErr),
-								CreatedAt:  o.nowFn().Unix(),
-							})
-							continue
-						}
-						if !allowed {
-							history = append(history, Message{
-								Role:       "tool",
-								Name:       toolName,
-								ToolCallID: callID,
-								Content:    "error: " + reason,
-								CreatedAt:  o.nowFn().Unix(),
-							})
-							continue
-						}
-					}
+					continue
 				}
 
 				signature := loopSignature(toolName, args)
@@ -1093,21 +1079,14 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 					contentStr = formatToolOutput(toolOut)
 				}
 
-				// Run tool:after_call hook.
-				if o.bus != nil {
-					hookOut, hookErr := o.bus.RunHook(ctx, "tool:after_call", map[string]any{
-						"session_id": sess.ID,
-						"workdir":    sess.Workdir,
-						"tool":       toolName,
-						"arguments":  args,
-						"output":     contentStr,
-					})
-					if hookErr == nil {
-						if modOut, ok := hookOut["output"].(string); ok {
-							contentStr = modOut
-						}
-					}
-				}
+				contentStr = o.FinishToolCall(ctx, plugin.ToolCall{
+					SessionID: sess.ID,
+					RootID:    rootID,
+					Depth:     sess.Depth,
+					Workdir:   sess.Workdir,
+					Name:      toolName,
+					Arguments: args,
+				}, args, contentStr)
 
 				emit(TurnEvent{Type: "tool_end", Step: steps, ToolName: toolName, ToolArgs: args, ToolOut: contentStr})
 
@@ -1136,6 +1115,9 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 		}
 		// Re-read the settings so a change made during the turn takes effect now.
 		mode := o.StepLimitMode()
+		if req.StepLimitMode != "" {
+			mode = req.StepLimitMode
+		}
 		if mode == StepLimitNone {
 			unlimited = true
 			budget = 0
@@ -1239,6 +1221,25 @@ func (o *Orchestrator) RunChild(ctx context.Context, req TurnRequest) (*TurnResu
 	return o.RunTurn(ctx, childReq, nil)
 }
 
+// CreateRootSession stores a new session without making it the active one for
+// its directory, so a remote task never takes over a local session.
+func (o *Orchestrator) CreateRootSession(workdir, kind, title, origin string) (*Session, error) {
+	now := o.nowFn()
+	s := &Session{
+		ID:        newSessionID(),
+		Workdir:   normalizeWorkdir(workdir),
+		Kind:      kind,
+		Title:     title,
+		Origin:    origin,
+		CreatedAt: now.Unix(),
+		UpdatedAt: now.Unix(),
+	}
+	if err := o.saveSession(s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
 func (o *Orchestrator) createSession(workdir, kind string, now time.Time) (*Session, error) {
 	s := &Session{
 		ID:        newSessionID(),
@@ -1270,13 +1271,16 @@ func (o *Orchestrator) saveSession(s *Session) error {
 	})
 }
 
-func (o *Orchestrator) buildToolDefs() []map[string]any {
+func (o *Orchestrator) buildToolDefs(allowed map[string]bool) []map[string]any {
 	if o.registry == nil {
 		return nil
 	}
 	specs := o.registry.ListTools()
 	out := make([]map[string]any, 0, len(specs))
 	for _, s := range specs {
+		if allowed != nil && !allowed[s.Name] {
+			continue
+		}
 		out = append(out, map[string]any{
 			"name":         s.Name,
 			"description":  s.Description,

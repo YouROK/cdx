@@ -47,13 +47,13 @@ function setup(cdx) {
       },
       required: ["question"]
     }
-  }, cdx.inWorker(function(args) {
+  }, async function(args) {
     var title = String(args.question || "").trim();
     if (!title) return { error: "question is required" };
 
     var options = optionList(args.options);
     var allowText = args.allow_text !== false || options.length === 0;
-    var answer = cdx.questions.ask({
+    var answer = await cdx.questions.ask({
       kind: "model",
       title: title,
       options: options,
@@ -73,5 +73,5 @@ function setup(cdx) {
       }
     }
     return { answer: answer.choice };
-  }));
+  });
 }
