@@ -1548,3 +1548,86 @@ func TestAsyncLimiterQueues(t *testing.T) {
 	}
 	limiter.Release()
 }
+
+func TestProvidersPluginClearsDefaultOnDelete(t *testing.T) {
+	tmp := t.TempDir()
+	st, err := store.Open(store.Options{
+		DBPath:        filepath.Join(tmp, "cdx.db"),
+		MasterKeyPath: filepath.Join(tmp, "master.key"),
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	rtRouter := router.New()
+	mgr := NewManager(RuntimeDependencies{
+		Store:    st,
+		Bus:      bus.New(),
+		Router:   rtRouter,
+		Registry: NewRegistry(),
+		Logger:   logx.New(),
+	})
+	defer mgr.CloseAll()
+
+	pluginDir := filepath.Join("..", "..", "plugins", "providers")
+	if _, err := mgr.LoadPlugin(context.Background(), pluginDir); err != nil {
+		t.Fatalf("load providers plugin: %v", err)
+	}
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		rtRouter.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
+		if w.Code != http.StatusOK {
+			t.Fatalf("POST %s failed: %d %s", path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	post("/api/plugins/providers/providers", `{"name":"test","protocol":"openai-chat","base_url":"http://127.0.0.1:1/v1"}`)
+	post("/api/plugins/providers/models", `{"provider":"test","name":"one","remote":"one","default":true}`)
+	post("/api/plugins/providers/models", `{"provider":"test","name":"two","remote":"two"}`)
+
+	w := httptest.NewRecorder()
+	rtRouter.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/plugins/providers/models?provider=test&name=one", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete model failed: %d %s", w.Code, w.Body.String())
+	}
+
+	state := func() []struct {
+		Name    string `json:"name"`
+		Default bool   `json:"default"`
+	} {
+		w := httptest.NewRecorder()
+		rtRouter.ServeHTTP(w, httptest.NewRequest("GET", "/api/plugins/providers/state", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("state failed: %d %s", w.Code, w.Body.String())
+		}
+		var out struct {
+			Models []struct {
+				Name    string `json:"name"`
+				Default bool   `json:"default"`
+			} `json:"models"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode state: %v", err)
+		}
+		return out.Models
+	}
+
+	models := state()
+	if len(models) != 1 || models[0].Name != "two" {
+		t.Fatalf("models after deleting the default = %+v, want only two", models)
+	}
+	if models[0].Default {
+		t.Fatalf("model two became the default after deleting the previous default: %+v", models)
+	}
+
+	w = httptest.NewRecorder()
+	rtRouter.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/plugins/providers/providers?name=test", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete provider failed: %d %s", w.Code, w.Body.String())
+	}
+	if models := state(); len(models) != 0 {
+		t.Fatalf("models after deleting the provider = %+v, want none", models)
+	}
+}

@@ -221,7 +221,7 @@ func (r *Registry) Complete(ctx context.Context, req CompleteRequest, onStream f
 			}
 		}
 		if chosen == nil {
-			chosen = &models[0]
+			return nil, fmt.Errorf("no default model is selected; set one in the providers panel")
 		}
 		req.Model = chosen.ID
 	}

@@ -765,6 +765,23 @@ func (o *Orchestrator) SaveMessages(s *Session, msgs []Message) error {
 	})
 }
 
+// hasModel reports whether a provider plugin still exposes the model ID or name.
+func (o *Orchestrator) hasModel(ctx context.Context, id string) bool {
+	if o.registry == nil {
+		return true
+	}
+	models, err := o.registry.ListModels(ctx)
+	if err != nil {
+		return true
+	}
+	for i := range models {
+		if models[i].ID == id || models[i].Name == id {
+			return true
+		}
+	}
+	return false
+}
+
 // RunTurn executes a full user turn, including hooks, provider streaming, and tool call iterations.
 func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent func(TurnEvent)) (result *TurnResult, err error) {
 	var sess *Session
@@ -807,8 +824,18 @@ func (o *Orchestrator) RunTurn(ctx context.Context, req TurnRequest, onEvent fun
 		rootID = sess.ID
 	}
 	modelName := req.Model
-	if modelName == "" {
-		modelName = sess.Model
+	if modelName == "" && sess.Model != "" {
+		if o.hasModel(ctx, sess.Model) {
+			modelName = sess.Model
+		} else {
+			o.log.Warn("Session model %s is not available, clearing it", sess.Model)
+			sess.Model = ""
+			if sess.Kind != KindNone && sess.ID != "ephemeral" {
+				if err := o.saveSession(sess); err != nil {
+					o.log.Warn("Failed to save the cleared session model: %v", err)
+				}
+			}
+		}
 	}
 	ctx = WithTurn(ctx, TurnInfo{
 		SessionID: sess.ID,

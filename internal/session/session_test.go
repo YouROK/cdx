@@ -1223,3 +1223,53 @@ func TestLoopSignatureIgnoresNumbers(t *testing.T) {
 		t.Fatalf("different tools produced the same signature: %q", first)
 	}
 }
+
+func TestTurnClearsRemovedSessionModel(t *testing.T) {
+	orch, _, reg, _ := setupTestOrchestrator(t)
+
+	models := []plugin.ModelInfo{{ID: "old/model", Name: "model", Default: true}}
+	completed := 0
+	reg.RegisterProvider(plugin.ProviderEntry{
+		PluginID: "mock",
+		ListModels: func(context.Context) ([]plugin.ModelInfo, error) {
+			return models, nil
+		},
+		Complete: func(context.Context, plugin.CompleteRequest, func(plugin.StreamEvent)) (*plugin.CompleteResponse, error) {
+			completed++
+			return &plugin.CompleteResponse{Content: "ok"}, nil
+		},
+	})
+
+	res, err := orch.RunTurn(context.Background(), TurnRequest{
+		Workdir: "/work",
+		Mode:    ModeAuto,
+		Prompt:  "first",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunTurn failed: %v", err)
+	}
+	if res.Session.Model != "old/model" {
+		t.Fatalf("session model = %q, want old/model", res.Session.Model)
+	}
+
+	models = []plugin.ModelInfo{{ID: "new/other", Name: "other"}}
+	_, err = orch.RunTurn(context.Background(), TurnRequest{
+		Workdir: "/work",
+		Mode:    ModeAuto,
+		Prompt:  "second",
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "no default model is selected") {
+		t.Fatalf("RunTurn error = %v, want a missing default model", err)
+	}
+
+	sess, found, err := orch.GetSession(res.Session.ID)
+	if err != nil || !found {
+		t.Fatalf("GetSession failed: found=%v err=%v", found, err)
+	}
+	if sess.Model != "" {
+		t.Fatalf("session model = %q, want it cleared", sess.Model)
+	}
+	if completed != 1 {
+		t.Fatalf("provider completed %d times, want 1", completed)
+	}
+}

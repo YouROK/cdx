@@ -420,11 +420,10 @@ function setup(cdx) {
     complete: async function(req, emit) {
       var modelRec = findModel(req.model);
       if (!modelRec) {
-        var all = getModels();
-        if (all.length === 0) {
-          throw new Error("No models configured. Add a provider and model in the Web UI.");
+        if (getModels().length === 0) {
+          throw new Error("No models are configured. Add a provider and model in the Web UI.");
         }
-        modelRec = all[0];
+        throw new Error("Model '" + String(req.model || "") + "' is not configured.");
       }
       var provider = findProvider(modelRec.provider);
       if (!provider) {

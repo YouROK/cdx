@@ -156,7 +156,7 @@ Isolated per-plugin **AES-256-GCM** encrypted bucket (`plugin_secrets:<id>`) in 
 
 ### 4.6. LLM Providers (`cdx.providers`)
 * `cdx.providers.register({ listModels, complete })`:
-  * `listModels()`: returns array of `{ id, name, provider, default, context_window }`.
+  * `listModels()`: returns array of `{ id, name, provider, default, context_window }`. The core uses the model marked `default: true` when the request names none; without such a model it reports that no model is selected.
   * `complete(req, emit)`: executes a completion turn for `req.model`, calling `emit({ type: "text"|"reasoning", delta: "..." })` for live streaming and returning `{ content, reasoning, tool_calls, usage }`. It may be `async` and await `cdx.sys.fetch`; the core waits for the returned promise while the VM keeps serving other work.
 
 ### 4.7. Lifecycle Hooks (`cdx.hooks`)
