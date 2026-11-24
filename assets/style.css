@@ -29,6 +29,7 @@ body {
 
 a { color: var(--accent-2); text-decoration: none; }
 a:hover { text-decoration: underline; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
 
 .wrap { width: 100%; max-width: 1040px; margin: 0 auto; padding: 0 24px; }
 
@@ -85,7 +86,7 @@ nav.top a:hover { color: var(--text); text-decoration: none; }
 .term pre { margin: 0; padding: 16px 18px; font: 13.5px/1.7 var(--mono); overflow-x: auto; }
 .prompt { color: var(--ok); }
 .cmd { color: var(--text); }
-.comment { color: #5f6d84; }
+.comment { color: #8b99b0; }
 .out { color: var(--muted); }
 
 /* sections */
@@ -145,8 +146,8 @@ table.kv th, table.kv td { text-align: left; padding: 12px 14px; border-bottom: 
 table.kv th { color: var(--muted); font-weight: 600; width: 34%; }
 table.kv tr:last-child td, table.kv tr:last-child th { border-bottom: 0; }
 
-/* media split */
-.split { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+/* stacked blocks */
+.stack { display: grid; gap: 26px; }
 .shot { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #05070b; }
 .shot img { display: block; width: 100%; height: auto; }
 
@@ -166,7 +167,7 @@ footer.site a { color: var(--muted); }
 footer.site a:hover { color: var(--text); }
 
 @media (max-width: 900px) {
-  .hero, .split, .grid.c2, .grid.c3 { grid-template-columns: 1fr; }
+  .hero, .grid.c2, .grid.c3 { grid-template-columns: 1fr; }
   .hero { padding-top: 44px; gap: 32px; }
   nav.top { display: none; }
   .term pre { white-space: pre-wrap; font-size: 12px; }

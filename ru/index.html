@@ -3,13 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>cdx - агент для терминала на Linux-серверах</title>
-<meta name="description" content="cdx - агент для админов: опишите задачу обычными словами, и он прочитает репозиторий, поправит файлы и выполнит команды на той машине, где запущен. Перед каждым действием спрашивает разрешение.">
+<title>cdx - агент командной строки для Linux</title>
+<meta name="description" content="cdx - агент в терминале: опишите задачу обычными словами, и он прочитает проект, поправит файлы и выполнит команды на вашей машине, спрашивая разрешение.">
+<link rel="canonical" href="https://yourok.github.io/cdx/ru/">
+<link rel="alternate" hreflang="en" href="https://yourok.github.io/cdx/">
+<link rel="alternate" hreflang="ru" href="https://yourok.github.io/cdx/ru/">
+<link rel="alternate" hreflang="x-default" href="https://yourok.github.io/cdx/">
 <meta property="og:title" content="cdx - агент командной строки">
 <meta property="og:description" content="Опишите задачу, cdx правит файлы и выполняет команды - спросив разрешение.">
 <meta property="og:type" content="website">
-<meta property="og:image" content="../assets/demo-poster.png">
-<link rel="icon" href="../assets/logo.png">
+<meta property="og:url" content="https://yourok.github.io/cdx/ru/">
+<meta property="og:image" content="https://yourok.github.io/cdx/assets/demo-poster.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#0a0d13">
+<link rel="icon" href="../assets/logo.png" sizes="512x512">
+<link rel="apple-touch-icon" href="../assets/logo.png">
 <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
@@ -39,8 +47,8 @@
     <div>
       <h1>Агент, который живёт в терминале</h1>
       <p class="lead">
-        Опишите задачу обычными словами. <strong>cdx</strong> прочитает репозиторий,
-        поправит файлы и выполнит команды на машине, где запущен, - и спросит
+        Опишите задачу обычными словами. <strong>cdx</strong> прочитает ваш проект,
+        поправит файлы и выполнит команды на машине, где вы его запустили, - и спросит
         разрешение перед каждым изменением.
       </p>
       <div class="actions">
@@ -53,29 +61,35 @@
       <div class="bar"><i></i><i></i><i></i></div>
       <pre><span class="prompt">$</span> <span class="cmd">sudo apt install ./cdx_&lt;version&gt;_amd64.deb</span>
 <span class="prompt">$</span> <span class="cmd">cdx "почему ночной бэкап идёт 3 часа?"</span>
-<span class="out">· reading backup.timer</span>
-<span class="out">· reading scripts/backup.sh</span>
-<span class="comment">Бэкап копирует 240 ГБ по одному файлу и не</span>
-<span class="comment">пропускает неизменившиеся файлы: это и есть 3 часа.</span>
-<span class="comment">Сжатие занимает 4 минуты.</span>
-<span class="out">Allow once: run `du -sh /srv/backup/*`?</span>
-<span class="out">[1] Allow  [2] Deny</span></pre>
+<span class="out">Permission required:</span>
+<span class="out">Run a shell command outside the working folder</span>
+<span class="out">  The action leaves the working folder.</span>
+<span class="out">  Command: du -sh /srv/backup/*</span>
+<span class="out">  Permission: dangerous</span>
+<span class="out">  Working folder: /etc/backup</span>
+<span class="out">  Outside: /srv/backup</span>
+<span class="out">  [1] Allow once (default)</span>
+<span class="out">  [2] Deny</span>
+Бэкап копирует 240 ГБ по одному файлу и не
+пропускает неизменившиеся файлы: это и есть 3 часа.
+Сжатие занимает 4 минуты.</pre>
     </div>
   </div>
 </div>
 
 <section id="use">
   <div class="wrap">
-    <h2>Что ему поручают админы</h2>
+    <h2>Для чего это используют</h2>
     <p class="sub">
-      Это не чат рядом с терминалом. Он работает в текущем каталоге на реальной
-      машине: читает файлы, запускает команды и показывает, что изменил.
+      Это не чат рядом с терминалом: он работает в текущем каталоге на реальной
+      машине - читает файлы, запускает команды и показывает, что изменил. Большая часть
+      примеров ниже - обычная работа админа.
     </p>
     <div class="grid c2">
       <div class="card">
         <h3>Разобраться в унаследованном коде</h3>
         <p>"Объясни, что делает этот сервис и какие порты слушает." cdx обходит
-          репозиторий и отвечает со ссылками на файлы и строки, а не догадками.</p>
+          проект и отвечает со ссылками на файлы и строки, а не догадками.</p>
       </div>
       <div class="card">
         <h3>Починить старые скрипты</h3>
@@ -89,7 +103,7 @@
           конфиги, затем называет причину и предлагает исправление.</p>
       </div>
       <div class="card">
-        <h3>Рутина без рутины</h3>
+        <h3>Автоматизировать рутину</h3>
         <p>"Напиши systemd-юнит для этого бинарника, поставь лимиты, включи." Команды
           выполняются только после вашего подтверждения.</p>
       </div>
@@ -176,34 +190,36 @@ done
   <div class="wrap">
     <h2>Как он устроен</h2>
     <p class="sub">
-      Один бинарник для CLI и один демон в фоне. Каждая возможность - плагин, поэтому
-      ядро остаётся маленьким: транспорт, хранилище, рантайм плагинов, цикл сессии.
+      Один бинарник: CLI, через который вы ставите задачи, и демон, который он поднимает
+      в фоне. Каждая возможность - плагин, поэтому ядро остаётся маленьким: транспорт,
+      хранилище, рантайм плагинов, цикл сессии.
     </p>
-    <div class="split">
+    <div class="stack">
       <div>
         <table class="kv">
           <tr><th>CLI</th><td><code>cdx "запрос"</code>, сессии на каталог, очередь, если два запроса пришли в одну папку</td></tr>
-          <tr><th>Демон</th><td>хранит сессии, провайдеров и права; общается через unix-сокет, панель на <code>127.0.0.1:8787</code></td></tr>
-          <tr><th>Провайдеры</th><td>любой OpenAI-совместимый endpoint (OpenAI, DeepSeek, OpenRouter, Ollama, LM Studio) и Anthropic</td></tr>
+          <tr><th>Демон</th><td>хранит сессии, провайдеров и права; отдаёт панель на <code>127.0.0.1:8787</code></td></tr>
+          <tr><th>Панель</th><td>провайдеры, модели, права, сессии, плагины и журналы; каждый плагин добавляет свою страницу</td></tr>
+          <tr><th>Провайдеры</th><td>любой OpenAI-совместимый сервис (OpenAI, DeepSeek, OpenRouter, Ollama, LM Studio) и Anthropic</td></tr>
           <tr><th>Инструменты</th><td>чтение, поиск, правка, shell, субагенты, MCP-серверы как дополнительные инструменты</td></tr>
           <tr><th>Данные</th><td><code>~/.local/share/cdx</code>, <code>~/.config/cdx</code>, <code>~/.local/state/cdx</code></td></tr>
         </table>
       </div>
       <div>
-<pre class="code"><span class="comment"># демон поднимается по требованию</span>
-<span class="prompt">$</span> <span class="cmd">cdx daemon status</span>
-<span class="out">Daemon status: running</span>
-
-<span class="prompt">$</span> <span class="cmd">cdx plugins list</span>
-<span class="out">auth, providers, permissions, tools-local,</span>
-<span class="out">subagent, mcp, mcp-server, webui, ...</span>
+<pre class="code wrap-code"><span class="comment"># демон поднимается по требованию</span>
+<span class="prompt">$</span> <span class="cmd">cdx --config</span>
+<span class="out">http://127.0.0.1:8787</span>
 
 <span class="prompt">$</span> <span class="cmd">cdx models</span>
 <span class="out">* openai/gpt-5      (plugin: providers)</span>
 <span class="out">  ollama/qwen3:8b    (plugin: providers)</span>
 
+<span class="prompt">$</span> <span class="cmd">cdx plugins list</span>
+<span class="out">auth                 v1.0.0    [enabled ] (system) API token and local-host check</span>
+<span class="out">providers            v1.0.0    [enabled ] (system) LLM connections, encrypted keys, models, streaming completions</span>
+
 <span class="prompt">$</span> <span class="cmd">cdx session list</span>
-<span class="out">01K9...  refactor backup.sh  /etc/backup</span></pre>
+<span class="out">* why the backup takes 3 hours  [persistent]  msgs=12  dir=/etc/backup  id=01K9ZQ3M7X8YV2R5T0N4B6C8DA</span></pre>
       </div>
     </div>
   </div>
@@ -214,37 +230,41 @@ done
     <h2>Спрашивает, прежде чем действовать</h2>
     <p class="sub">
       Каждая правка, каждая команда и каждый путь вне рабочего каталога проходят через
-      проверку разрешений. Ответ по умолчанию для неразрешённого действия - "нет".
+      проверку разрешений. Пока вы не ответили, ничего не выполняется.
     </p>
     <div class="shot" style="margin-bottom:18px">
-      <img src="../assets/permission.png" alt="Запрос разрешения в cdx: команда, рабочий каталог и внешние пути" loading="lazy">
+      <img src="../assets/permission.png" width="1923" height="1262" alt="Запрос разрешения в cdx для команды shell: команда, класс разрешения и варианты ответа" loading="lazy">
     </div>
     <p class="caption" style="margin-bottom:28px">
-      В запросе видно команду, рабочий каталог и все внешние пути до того, как вы
-      ответите. Enter выбирает вариант по умолчанию - "разрешить один раз".
+      В запросе видно инструмент, точную команду и класс разрешения до того, как вы
+      ответите. Enter выбирает вариант по умолчанию - "разрешить один раз"; остальные
+      варианты дают разрешение на сессию, на запуск демона или навсегда.
     </p>
     <div class="grid c2">
       <div class="card">
         <h3>По классам действий</h3>
-        <p>Чтение, правка и опасные инструменты имеют <code>allow</code>,
-          <code>ask</code> или <code>deny</code>; отдельная настройка решает, что
-          делать вне рабочего каталога.</p>
+        <p>Чтение, правки и команды shell имеют <code>allow</code>, <code>ask</code> или
+          <code>deny</code>. По умолчанию разрешено только чтение, а всё, что меняет
+          данные на ПК, спрашивает.</p>
       </div>
       <div class="card">
-        <h3>Правила опасных команд</h3>
-        <p>Шаблоны вроде <code>rm -rf</code>, <code>git push --force</code> и
-          <code>mkfs</code> помечены как критичные и не проходят как обычные.</p>
+        <h3>Без песочницы, осознанно</h3>
+        <p>cdx работает с реальной машиной под вашим пользователем, а не в изоляции.
+          Модель может ошибиться - и ошибочная команда сломает что-то по-настоящему.
+          Запускайте cdx в Docker или на виртуалке, чтобы не сломать ПК.</p>
       </div>
       <div class="card">
-        <h3>Действие целиком, а не пересказ</h3>
-        <p>Никаких "агент что-то хочет сделать": видно точную команду, файл или
-          каталог, которые будут изменены.</p>
+        <h3>Каждую команду подтверждаете вы</h3>
+        <p>cdx не ведёт список "плохих" команд - опасной может быть любая. По умолчанию
+          перед запуском он показывает точную команду, рабочий каталог и все внешние
+          пути. Вы сами подтверждаете то, что будет выполнено.</p>
       </div>
       <div class="card">
         <h3>Локально по умолчанию</h3>
-        <p>Панель слушает <code>127.0.0.1</code> и требует токен; удалённый доступ -
-          явное включение с предупреждением. Запросы уходят только настроенному
-          провайдеру.</p>
+        <p>У cdx есть веб-панель, и по умолчанию она доступна лишь с этой же машины
+          (<code>127.0.0.1</code>). API требует токен - он создаётся при первом запуске.
+          Для общего доступа есть <code>CDX_ALLOW_REMOTE_HOST</code>, он отключает эти
+          проверки.</p>
       </div>
     </div>
   </div>
@@ -261,7 +281,8 @@ done
     <details class="install" open>
       <summary>Debian / Ubuntu (.deb)</summary>
       <div class="body">
-        <p>Файл <code>cdx_&lt;version&gt;_amd64.deb</code> возьмите на странице релизов.</p>
+        <p>Файл <code>cdx_&lt;version&gt;_amd64.deb</code> возьмите на
+          <a href="https://github.com/YouROK/cdx/releases/latest">странице релизов</a>.</p>
 <pre class="code">sudo apt install ./cdx_&lt;version&gt;_amd64.deb</pre>
       </div>
     </details>
@@ -301,18 +322,20 @@ sudo make install    <span class="comment"># /usr/bin/cdx и /usr/share/cdx/plug
     <div class="grid c3" style="margin-top:28px">
       <div class="card">
         <h3>Первый запуск</h3>
-        <p>Поднимите демон, откройте панель, добавьте провайдера и модель.</p>
-<pre class="code" style="margin-top:12px">cdx daemon run --http 127.0.0.1:8787</pre>
-      </div>
-      <div class="card">
-        <h3>Страница настроек</h3>
-        <p>Поднимает демон, если нужно, и открывает панель в браузере.</p>
+        <p>Поднимает демон и открывает веб-интерфейс, где вы добавляете провайдера и
+          модель.</p>
 <pre class="code" style="margin-top:12px">cdx --config</pre>
       </div>
       <div class="card">
-        <h3>Один запрос</h3>
-        <p>Работает в текущем каталоге и сохраняет сессию для следующего запроса.</p>
+        <h3>Просто спросить</h3>
+        <p>Работает в текущем каталоге и сохраняет сессию для следующего вопроса. Демон
+          поднимается по требованию.</p>
 <pre class="code" style="margin-top:12px">cdx "объясни этот пакет"</pre>
+      </div>
+      <div class="card">
+        <h3>Демон</h3>
+        <p>Держит сессии, провайдеров и права в фоне, пока вы работаете.</p>
+<pre class="code" style="margin-top:12px">cdx daemon status</pre>
       </div>
     </div>
   </div>

@@ -3,13 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>cdx - a command-line coding agent for Linux servers</title>
-<meta name="description" content="cdx is a terminal agent for admins: describe the task in plain language, and it reads the repository, edits files and runs commands on the machine it runs on. It asks before it touches anything.">
+<title>cdx - a command-line coding agent for Linux</title>
+<meta name="description" content="cdx is a coding agent in your terminal: describe a task in plain language and it reads your project, edits files and runs commands - asking before every change.">
+<link rel="canonical" href="https://yourok.github.io/cdx/">
+<link rel="alternate" hreflang="en" href="https://yourok.github.io/cdx/">
+<link rel="alternate" hreflang="ru" href="https://yourok.github.io/cdx/ru/">
+<link rel="alternate" hreflang="x-default" href="https://yourok.github.io/cdx/">
 <meta property="og:title" content="cdx - a command-line coding agent">
-<meta property="og:description" content="Describe the task, cdx edits the files and runs the commands - after asking you first.">
+<meta property="og:description" content="Describe the task, cdx edits your files and runs the commands - after asking you first.">
 <meta property="og:type" content="website">
-<meta property="og:image" content="assets/demo-poster.png">
-<link rel="icon" href="assets/logo.png">
+<meta property="og:url" content="https://yourok.github.io/cdx/">
+<meta property="og:image" content="https://yourok.github.io/cdx/assets/demo-poster.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#0a0d13">
+<link rel="icon" href="assets/logo.png" sizes="512x512">
+<link rel="apple-touch-icon" href="assets/logo.png">
 <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -39,8 +47,8 @@
     <div>
       <h1>A coding agent that lives in your terminal</h1>
       <p class="lead">
-        Describe the task in plain language. <strong>cdx</strong> reads the repository,
-        edits the files and runs commands on the machine it runs on - and asks for
+        Describe the task in plain language. <strong>cdx</strong> reads your project,
+        edits the files and runs commands on the machine you run it on - and asks for
         permission before every change.
       </p>
       <div class="actions">
@@ -53,29 +61,35 @@
       <div class="bar"><i></i><i></i><i></i></div>
       <pre><span class="prompt">$</span> <span class="cmd">sudo apt install ./cdx_&lt;version&gt;_amd64.deb</span>
 <span class="prompt">$</span> <span class="cmd">cdx "why does the nightly backup take 3 hours?"</span>
-<span class="out">· reading backup.timer</span>
-<span class="out">· reading scripts/backup.sh</span>
-<span class="comment">The backup copies 240 GB one file at a time and</span>
-<span class="comment">never skips unchanged files: that is the 3 hours.</span>
-<span class="comment">Compression is 4 minutes of it.</span>
-<span class="out">Allow once: run `du -sh /srv/backup/*`?</span>
-<span class="out">[1] Allow  [2] Deny</span></pre>
+<span class="out">Permission required:</span>
+<span class="out">Run a shell command outside the working folder</span>
+<span class="out">  The action leaves the working folder.</span>
+<span class="out">  Command: du -sh /srv/backup/*</span>
+<span class="out">  Permission: dangerous</span>
+<span class="out">  Working folder: /etc/backup</span>
+<span class="out">  Outside: /srv/backup</span>
+<span class="out">  [1] Allow once (default)</span>
+<span class="out">  [2] Deny</span>
+The backup copies 240 GB one file at a time and
+never skips unchanged files: that is the 3 hours.
+Compression is 4 minutes of it.</pre>
     </div>
   </div>
 </div>
 
 <section id="use">
   <div class="wrap">
-    <h2>What admins hand to it</h2>
+    <h2>What it is used for</h2>
     <p class="sub">
-      It is not a chat window next to your terminal. It works in the current directory on
-      the real machine: reads files, runs commands, shows what it changed.
+      It is not a chat window next to your terminal: it works in the current directory on
+      the real machine - reads files, runs commands and shows what it changed. Most of the
+      work below is routine sysadmin work.
     </p>
     <div class="grid c2">
       <div class="card">
         <h3>Understand code you inherited</h3>
         <p>"Explain what this service does and which ports it opens." cdx walks the
-          repository and answers with file and line references instead of guessing.</p>
+          project and answers with file and line references instead of guessing.</p>
       </div>
       <div class="card">
         <h3>Fix classic scripts</h3>
@@ -88,7 +102,7 @@
           files and configs, then names the cause and the fix.</p>
       </div>
       <div class="card">
-        <h3>Keep the routine boring</h3>
+        <h3>Automate the routine</h3>
         <p>"Write a systemd unit for this binary, set the limits, enable it." The
           commands run only after you approve them.</p>
       </div>
@@ -175,34 +189,36 @@ done
   <div class="wrap">
     <h2>How it is built</h2>
     <p class="sub">
-      One binary for the CLI and one daemon in the background. Every feature is a plugin,
-      so the core stays small: transport, storage, the plugin runtime, the session loop.
+      One binary: the CLI you talk to and the daemon it starts in the background. Every
+      feature is a plugin, so the core stays small: transport, storage, the plugin
+      runtime, the session loop.
     </p>
-    <div class="split">
+    <div class="stack">
       <div>
         <table class="kv">
           <tr><th>CLI</th><td><code>cdx "prompt"</code>, sessions per directory, queueing when two prompts land in the same folder</td></tr>
-          <tr><th>Daemon</th><td>keeps sessions, providers and permissions; talks over a unix socket, serves the dashboard on <code>127.0.0.1:8787</code></td></tr>
+          <tr><th>Daemon</th><td>keeps sessions, providers and permissions; serves the dashboard on <code>127.0.0.1:8787</code></td></tr>
+          <tr><th>Dashboard</th><td>providers, models, permissions, sessions, plugins and logs; every plugin adds its own page</td></tr>
           <tr><th>Providers</th><td>any OpenAI-compatible endpoint (OpenAI, DeepSeek, OpenRouter, Ollama, LM Studio) and Anthropic</td></tr>
           <tr><th>Tools</th><td>read, search, edit, shell, subagents, MCP servers as extra tools</td></tr>
           <tr><th>Data</th><td><code>~/.local/share/cdx</code>, <code>~/.config/cdx</code>, <code>~/.local/state/cdx</code></td></tr>
         </table>
       </div>
       <div>
-<pre class="code"><span class="comment"># the daemon starts on demand</span>
-<span class="prompt">$</span> <span class="cmd">cdx daemon status</span>
-<span class="out">Daemon status: running</span>
-
-<span class="prompt">$</span> <span class="cmd">cdx plugins list</span>
-<span class="out">auth, providers, permissions, tools-local,</span>
-<span class="out">subagent, mcp, mcp-server, webui, ...</span>
+<pre class="code wrap-code"><span class="comment"># the daemon starts on demand</span>
+<span class="prompt">$</span> <span class="cmd">cdx --config</span>
+<span class="out">http://127.0.0.1:8787</span>
 
 <span class="prompt">$</span> <span class="cmd">cdx models</span>
 <span class="out">* openai/gpt-5      (plugin: providers)</span>
 <span class="out">  ollama/qwen3:8b    (plugin: providers)</span>
 
+<span class="prompt">$</span> <span class="cmd">cdx plugins list</span>
+<span class="out">auth                 v1.0.0    [enabled ] (system) API token and local-host check</span>
+<span class="out">providers            v1.0.0    [enabled ] (system) LLM connections, encrypted keys, models, streaming completions</span>
+
 <span class="prompt">$</span> <span class="cmd">cdx session list</span>
-<span class="out">01K9...  refactor backup.sh  /etc/backup</span></pre>
+<span class="out">* why the backup takes 3 hours  [persistent]  msgs=12  dir=/etc/backup  id=01K9ZQ3M7X8YV2R5T0N4B6C8DA</span></pre>
       </div>
     </div>
   </div>
@@ -212,38 +228,42 @@ done
   <div class="wrap">
     <h2>It asks before it acts</h2>
     <p class="sub">
-      Every edit, every shell command and every path outside the working folder goes
-      through a permission check. The default answer for an unapproved action is "no".
+      Every edit, every shell command and every path outside the working folder go
+      through a permission check. Nothing happens until you answer.
     </p>
     <div class="shot" style="margin-bottom:18px">
-      <img src="assets/permission.png" alt="A cdx permission prompt: the command, the working folder and the outside paths" loading="lazy">
+      <img src="assets/permission.png" width="1923" height="1262" alt="A cdx permission prompt for a shell command: the command, its permission class and the answer options" loading="lazy">
     </div>
     <p class="caption" style="margin-bottom:28px">
-      The prompt shows the command, the working folder and every outside path before you
-      answer. Enter takes the default, which is "allow once".
+      The prompt shows the tool, the exact command and the permission class before you
+      answer. Enter takes the default, "allow once"; the other answers allow it for this
+      session, for this daemon run, or always.
     </p>
     <div class="grid c2">
       <div class="card">
         <h3>Per class of action</h3>
-        <p>Read, edit and dangerous tools each have <code>allow</code>,
-          <code>ask</code> or <code>deny</code>; a separate option decides what happens
-          outside the working folder.</p>
+        <p>Reading, edits and shell commands each have <code>allow</code>,
+          <code>ask</code> or <code>deny</code>. By default only reading is allowed;
+          anything that changes data on the machine asks first.</p>
       </div>
       <div class="card">
-        <h3>Danger rules</h3>
-        <p>Patterns such as <code>rm -rf</code>, <code>git push --force</code> and
-          <code>mkfs</code> are marked critical and never pass as routine commands.</p>
+        <h3>No sandbox, by design</h3>
+        <p>cdx works on the real machine as your user, not in isolation. The model can be
+          wrong - and a wrong command really breaks things. Run cdx in Docker or a VM so it
+          cannot break your machine.</p>
       </div>
       <div class="card">
-        <h3>Full action, not a summary</h3>
-        <p>There is no "the agent wants to do something". You see the exact command,
-          file or folder that is about to change.</p>
+        <h3>You approve every command</h3>
+        <p>cdx keeps no list of "bad" commands - any of them can be dangerous. By default
+          it shows the exact command, the working folder and every outside path before
+          running it. You approve what will actually run.</p>
       </div>
       <div class="card">
         <h3>Local by default</h3>
-        <p>The dashboard listens on <code>127.0.0.1</code> and needs a token; remote
-          access is an explicit opt-in with a warning. Prompts go only to the provider
-          you configure.</p>
+        <p>cdx has a web dashboard, and by default it is reachable only from this machine
+          (<code>127.0.0.1</code>). The API requires a token, created on first start. For
+          shared access there is <code>CDX_ALLOW_REMOTE_HOST</code>, which turns those
+          checks off.</p>
       </div>
     </div>
   </div>
@@ -260,7 +280,8 @@ done
     <details class="install" open>
       <summary>Debian / Ubuntu (.deb)</summary>
       <div class="body">
-        <p>Downloads <code>cdx_&lt;version&gt;_amd64.deb</code> from the releases page.</p>
+        <p>Download <code>cdx_&lt;version&gt;_amd64.deb</code> from the
+          <a href="https://github.com/YouROK/cdx/releases/latest">releases page</a>.</p>
 <pre class="code">sudo apt install ./cdx_&lt;version&gt;_amd64.deb</pre>
       </div>
     </details>
@@ -300,18 +321,20 @@ sudo make install    <span class="comment"># /usr/bin/cdx and /usr/share/cdx/plu
     <div class="grid c3" style="margin-top:28px">
       <div class="card">
         <h3>First run</h3>
-        <p>Start the daemon, open the dashboard, add a provider and a model.</p>
-<pre class="code" style="margin-top:12px">cdx daemon run --http 127.0.0.1:8787</pre>
-      </div>
-      <div class="card">
-        <h3>Settings page</h3>
-        <p>Starts the daemon if needed and opens the dashboard in the browser.</p>
+        <p>Starts the daemon and opens the web interface, where you add a provider and a
+          model.</p>
 <pre class="code" style="margin-top:12px">cdx --config</pre>
       </div>
       <div class="card">
-        <h3>One-shot request</h3>
-        <p>Runs in the current directory, keeps the session for the next prompt.</p>
+        <h3>Just ask</h3>
+        <p>Runs in the current directory and keeps the session for the next question. The
+          daemon starts on demand.</p>
 <pre class="code" style="margin-top:12px">cdx "explain this package"</pre>
+      </div>
+      <div class="card">
+        <h3>Daemon</h3>
+        <p>Keeps sessions, providers and permissions in the background while you work.</p>
+<pre class="code" style="margin-top:12px">cdx daemon status</pre>
       </div>
     </div>
   </div>
