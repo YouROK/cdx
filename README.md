@@ -15,6 +15,9 @@ the web dashboard - is a plugin.
 The core never embeds plugins: the default ones live in `plugins/` and are
 installed next to the binary by `make install`.
 
+The project page has screenshots, the demo session, and the install steps for
+every package format: <https://yourok.github.io/cdx/>.
+
 ## Requirements
 
 - Go 1.27 or newer.
