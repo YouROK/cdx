@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://yourok.github.io/cdx/sitemap.xml
