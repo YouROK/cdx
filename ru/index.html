@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cdx - агент для терминала на Linux-серверах</title>
+<meta name="description" content="cdx - агент для админов: опишите задачу обычными словами, и он прочитает репозиторий, поправит файлы и выполнит команды на той машине, где запущен. Перед каждым действием спрашивает разрешение.">
+<meta property="og:title" content="cdx - агент командной строки">
+<meta property="og:description" content="Опишите задачу, cdx правит файлы и выполняет команды - спросив разрешение.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="../assets/demo-poster.png">
+<link rel="icon" href="../assets/logo.png">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="../"><img src="../assets/logo.png" alt=""><span>cdx</span></a>
+    <nav class="top">
+      <a href="#use">Что умеет</a>
+      <a href="#demo">Демо</a>
+      <a href="#example">Пример</a>
+      <a href="#how">Как устроен</a>
+      <a href="#safety">Безопасность</a>
+      <a href="#install">Установка</a>
+    </nav>
+    <div class="lang">
+      <a href="../">EN</a>
+      <a href="./" aria-current="true">RU</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h1>Агент, который живёт в терминале</h1>
+      <p class="lead">
+        Опишите задачу обычными словами. <strong>cdx</strong> прочитает репозиторий,
+        поправит файлы и выполнит команды на машине, где запущен, - и спросит
+        разрешение перед каждым изменением.
+      </p>
+      <div class="actions">
+        <a class="btn primary" href="#install">Установить</a>
+        <a class="btn" href="https://github.com/YouROK/cdx">GitHub</a>
+        <a class="btn" href="https://github.com/YouROK/cdx/releases">Релизы</a>
+      </div>
+    </div>
+    <div class="term">
+      <div class="bar"><i></i><i></i><i></i></div>
+      <pre><span class="prompt">$</span> <span class="cmd">sudo apt install ./cdx_&lt;version&gt;_amd64.deb</span>
+<span class="prompt">$</span> <span class="cmd">cdx "почему ночной бэкап идёт 3 часа?"</span>
+<span class="out">· reading backup.timer</span>
+<span class="out">· reading scripts/backup.sh</span>
+<span class="comment">Бэкап копирует 240 ГБ по одному файлу и не</span>
+<span class="comment">пропускает неизменившиеся файлы: это и есть 3 часа.</span>
+<span class="comment">Сжатие занимает 4 минуты.</span>
+<span class="out">Allow once: run `du -sh /srv/backup/*`?</span>
+<span class="out">[1] Allow  [2] Deny</span></pre>
+    </div>
+  </div>
+</div>
+
+<section id="use">
+  <div class="wrap">
+    <h2>Что ему поручают админы</h2>
+    <p class="sub">
+      Это не чат рядом с терминалом. Он работает в текущем каталоге на реальной
+      машине: читает файлы, запускает команды и показывает, что изменил.
+    </p>
+    <div class="grid c2">
+      <div class="card">
+        <h3>Разобраться в унаследованном коде</h3>
+        <p>"Объясни, что делает этот сервис и какие порты слушает." cdx обходит
+          репозиторий и отвечает со ссылками на файлы и строки, а не догадками.</p>
+      </div>
+      <div class="card">
+        <h3>Починить старые скрипты</h3>
+        <p>"Скрипт сборки собирает по одной цели - пусть собирает пять." На выходе
+          дифф, а не переписанный файл: те же флаги, те же имена, поменялись только
+          циклы.</p>
+      </div>
+      <div class="card">
+        <h3>Работа с юнитами и логами</h3>
+        <p>"Почему контейнер перезапустился в 3 ночи?" Читает journald, юниты и
+          конфиги, затем называет причину и предлагает исправление.</p>
+      </div>
+      <div class="card">
+        <h3>Рутина без рутины</h3>
+        <p>"Напиши systemd-юнит для этого бинарника, поставь лимиты, включи." Команды
+          выполняются только после вашего подтверждения.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="demo">
+  <div class="wrap">
+    <h2>Настоящая сессия целиком</h2>
+    <p class="sub">
+      Реальная сессия, записана на обычной скорости и ускорена в 2.5 раза: скрипт сборки
+      на 16 целей переделывается на пять параллельных сборок.
+    </p>
+    <div class="video">
+      <video controls preload="none" poster="../assets/demo-poster.png" width="1152" height="700">
+        <source src="../assets/demo.webm" type="video/webm">
+        <source src="../assets/demo.mp4" type="video/mp4">
+        <a href="../assets/demo.mp4">Скачать видео</a>
+      </video>
+    </div>
+    <p class="caption">
+      Время сессии: 2 мин 11 с, 15 шагов. Модель - выбранная по умолчанию; на записи
+      подтверждения разрешений были выданы заранее.
+    </p>
+  </div>
+</section>
+
+<section id="example">
+  <div class="wrap">
+    <h2>Настоящий пример: build-all.sh</h2>
+    <p class="sub">
+      <code>build-all.sh</code> из Go-проекта собирает шестнадцать платформ одну за
+      другой, потом варианты с GStreamer, потом цели под Android. На ноутбуке это
+      перерыв на кофе, на сборочном сервере - простой ядер.
+    </p>
+
+    <div class="code-head"><span><span class="dot"></span>было - по одной сборке</span></div>
+<pre class="code">for PLATFORM in "${PLATFORMS[@]}"; do
+  GOOS=${PLATFORM%/*}
+  GOARCH=${PLATFORM#*/}
+  CMD="GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=0 ${GOBIN} build ${BUILD_FLAGS} -o ${BIN_FILENAME} ./cmd"
+  echo "${CMD}"
+  eval "$CMD" || FAILURES="${FAILURES} ${GOOS}/${GOARCH}${GOARM}"
+done</pre>
+
+    <p class="sub" style="margin-top:28px">Запрос:</p>
+<pre class="code wrap-code"><span class="prompt">$</span> <span class="cmd">cdx "The builds in build-all.sh run one after another. Make it run up to 5 builds in parallel and keep the same flags and output names."</span></pre>
+
+    <div class="code-head" style="margin-top:28px"><span><span class="dot"></span>стало - пул задач с ограничением, ошибки сообщаются как раньше</span></div>
+<pre class="code">MAX_JOBS=${MAX_JOBS:-5}
+spawn_build() {
+  local cmd="$1" label="$2" running id
+  while :; do
+    running=$(jobs -rp | wc -l)
+    (( running &lt; MAX_JOBS )) &amp;&amp; break
+    wait -n
+  done
+  ...
+  ( if ! eval "${cmd}"; then : &gt; "${JOBS_TMP}/${id}.failed"; fi ) &amp;
+}
+
+for PLATFORM in "${PLATFORMS[@]}"; do
+  ...
+  <span class="add">spawn_build "${CMD}" "${GOOS}/${GOARCH}${GOARM}"</span>
+done
+<span class="add">wait_builds</span></pre>
+
+    <p class="sub" style="margin-top:24px">
+      Важнее то, что осталось прежним: флаги сборки, пути <code>-o</code>, суффикс
+      <code>.exe</code>, обработка GOARM/GOMIPS и итоговый блок
+      <code>failed on: ...</code> с кодом 1. Сборка веба, <code>go mod tidy</code>,
+      AppImages и шаг с docker оставлены последовательными намеренно: они делят один
+      каталог и перезаписали бы друг друга.
+    </p>
+    <p class="sub">
+      <a href="https://github.com/YouROK/TorrServer/blob/master/build-all.sh">Оригинальный скрипт</a>
+      не тронут: cdx работал с копией во временном каталоге.
+    </p>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>Как он устроен</h2>
+    <p class="sub">
+      Один бинарник для CLI и один демон в фоне. Каждая возможность - плагин, поэтому
+      ядро остаётся маленьким: транспорт, хранилище, рантайм плагинов, цикл сессии.
+    </p>
+    <div class="split">
+      <div>
+        <table class="kv">
+          <tr><th>CLI</th><td><code>cdx "запрос"</code>, сессии на каталог, очередь, если два запроса пришли в одну папку</td></tr>
+          <tr><th>Демон</th><td>хранит сессии, провайдеров и права; общается через unix-сокет, панель на <code>127.0.0.1:8787</code></td></tr>
+          <tr><th>Провайдеры</th><td>любой OpenAI-совместимый endpoint (OpenAI, DeepSeek, OpenRouter, Ollama, LM Studio) и Anthropic</td></tr>
+          <tr><th>Инструменты</th><td>чтение, поиск, правка, shell, субагенты, MCP-серверы как дополнительные инструменты</td></tr>
+          <tr><th>Данные</th><td><code>~/.local/share/cdx</code>, <code>~/.config/cdx</code>, <code>~/.local/state/cdx</code></td></tr>
+        </table>
+      </div>
+      <div>
+<pre class="code"><span class="comment"># демон поднимается по требованию</span>
+<span class="prompt">$</span> <span class="cmd">cdx daemon status</span>
+<span class="out">Daemon status: running</span>
+
+<span class="prompt">$</span> <span class="cmd">cdx plugins list</span>
+<span class="out">auth, providers, permissions, tools-local,</span>
+<span class="out">subagent, mcp, mcp-server, webui, ...</span>
+
+<span class="prompt">$</span> <span class="cmd">cdx models</span>
+<span class="out">* openai/gpt-5      (plugin: providers)</span>
+<span class="out">  ollama/qwen3:8b    (plugin: providers)</span>
+
+<span class="prompt">$</span> <span class="cmd">cdx session list</span>
+<span class="out">01K9...  refactor backup.sh  /etc/backup</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <h2>Спрашивает, прежде чем действовать</h2>
+    <p class="sub">
+      Каждая правка, каждая команда и каждый путь вне рабочего каталога проходят через
+      проверку разрешений. Ответ по умолчанию для неразрешённого действия - "нет".
+    </p>
+    <div class="shot" style="margin-bottom:18px">
+      <img src="../assets/permission.png" alt="Запрос разрешения в cdx: команда, рабочий каталог и внешние пути" loading="lazy">
+    </div>
+    <p class="caption" style="margin-bottom:28px">
+      В запросе видно команду, рабочий каталог и все внешние пути до того, как вы
+      ответите. Enter выбирает вариант по умолчанию - "разрешить один раз".
+    </p>
+    <div class="grid c2">
+      <div class="card">
+        <h3>По классам действий</h3>
+        <p>Чтение, правка и опасные инструменты имеют <code>allow</code>,
+          <code>ask</code> или <code>deny</code>; отдельная настройка решает, что
+          делать вне рабочего каталога.</p>
+      </div>
+      <div class="card">
+        <h3>Правила опасных команд</h3>
+        <p>Шаблоны вроде <code>rm -rf</code>, <code>git push --force</code> и
+          <code>mkfs</code> помечены как критичные и не проходят как обычные.</p>
+      </div>
+      <div class="card">
+        <h3>Действие целиком, а не пересказ</h3>
+        <p>Никаких "агент что-то хочет сделать": видно точную команду, файл или
+          каталог, которые будут изменены.</p>
+      </div>
+      <div class="card">
+        <h3>Локально по умолчанию</h3>
+        <p>Панель слушает <code>127.0.0.1</code> и требует токен; удалённый доступ -
+          явное включение с предупреждением. Запросы уходят только настроенному
+          провайдеру.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Установка</h2>
+    <p class="sub">
+      Пакеты для i386, x86_64, armv7 и aarch64 собираются к каждому релизу. Берите тот,
+      который понимает ваш дистрибутив.
+    </p>
+
+    <details class="install" open>
+      <summary>Debian / Ubuntu (.deb)</summary>
+      <div class="body">
+        <p>Файл <code>cdx_&lt;version&gt;_amd64.deb</code> возьмите на странице релизов.</p>
+<pre class="code">sudo apt install ./cdx_&lt;version&gt;_amd64.deb</pre>
+      </div>
+    </details>
+
+    <details class="install">
+      <summary>Fedora / RHEL / openSUSE (.rpm)</summary>
+      <div class="body">
+<pre class="code">sudo dnf install ./cdx-&lt;version&gt;-1.x86_64.rpm</pre>
+      </div>
+    </details>
+
+    <details class="install">
+      <summary>Alpine (.apk)</summary>
+      <div class="body">
+        <p>Пакет не подписан, поэтому нужен флаг.</p>
+<pre class="code">sudo apk add --allow-untrusted ./cdx_&lt;version&gt;_x86_64.apk</pre>
+      </div>
+    </details>
+
+    <details class="install">
+      <summary>Любой Linux (zip + install.sh)</summary>
+      <div class="body">
+<pre class="code">unzip cdx_&lt;version&gt;_linux_x86_64.zip -d cdx
+sudo ./cdx/install.sh          <span class="comment"># /usr/bin/cdx и /usr/share/cdx/plugins</span></pre>
+      </div>
+    </details>
+
+    <details class="install">
+      <summary>Из исходников</summary>
+      <div class="body">
+        <p>Нужны Go 1.27+ и Node.js 22+, чтобы собрать бинарник и панели.</p>
+<pre class="code">make                 <span class="comment"># веб-интерфейс, панели плагинов, бинарник</span>
+sudo make install    <span class="comment"># /usr/bin/cdx и /usr/share/cdx/plugins</span></pre>
+      </div>
+    </details>
+
+    <div class="grid c3" style="margin-top:28px">
+      <div class="card">
+        <h3>Первый запуск</h3>
+        <p>Поднимите демон, откройте панель, добавьте провайдера и модель.</p>
+<pre class="code" style="margin-top:12px">cdx daemon run --http 127.0.0.1:8787</pre>
+      </div>
+      <div class="card">
+        <h3>Страница настроек</h3>
+        <p>Поднимает демон, если нужно, и открывает панель в браузере.</p>
+<pre class="code" style="margin-top:12px">cdx --config</pre>
+      </div>
+      <div class="card">
+        <h3>Один запрос</h3>
+        <p>Работает в текущем каталоге и сохраняет сессию для следующего запроса.</p>
+<pre class="code" style="margin-top:12px">cdx "объясни этот пакет"</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <h2>Документация</h2>
+    <div class="grid c2">
+      <div class="card">
+        <h3><a href="https://github.com/YouROK/cdx#readme">README</a></h3>
+        <p>Установка, использование, веб-интерфейс, удалённый доступ, подтверждения.</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/YouROK/cdx/blob/main/ARCHITECTURE.md">Архитектура</a></h3>
+        <p>Модули ядра и контракты между ядром и плагинами.</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/YouROK/cdx/blob/main/PLUGINS.md">Руководство по плагинам</a></h3>
+        <p>Формат манифеста, API <code>cdx</code>, панели, разрешения.</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/YouROK/cdx/blob/main/MCP-SERVER.md">MCP-сервер</a></h3>
+        <p>Отдать cdx как инструменты другому агенту, с подтверждениями и правами на клиента.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div>cdx - <a href="https://github.com/YouROK/cdx/blob/main/LICENSE">GPL-3.0</a></div>
+    <div>
+      <a href="https://github.com/YouROK/cdx">GitHub</a> ·
+      <a href="https://github.com/YouROK/cdx/releases">Релизы</a> ·
+      <a href="../">English</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

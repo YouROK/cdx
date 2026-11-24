@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cdx - a command-line coding agent for Linux servers</title>
+<meta name="description" content="cdx is a terminal agent for admins: describe the task in plain language, and it reads the repository, edits files and runs commands on the machine it runs on. It asks before it touches anything.">
+<meta property="og:title" content="cdx - a command-line coding agent">
+<meta property="og:description" content="Describe the task, cdx edits the files and runs the commands - after asking you first.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="assets/demo-poster.png">
+<link rel="icon" href="assets/logo.png">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="assets/logo.png" alt=""><span>cdx</span></a>
+    <nav class="top">
+      <a href="#use">What it does</a>
+      <a href="#demo">Demo</a>
+      <a href="#example">Real example</a>
+      <a href="#how">How it works</a>
+      <a href="#safety">Safety</a>
+      <a href="#install">Install</a>
+    </nav>
+    <div class="lang">
+      <a href="./" aria-current="true">EN</a>
+      <a href="ru/">RU</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h1>A coding agent that lives in your terminal</h1>
+      <p class="lead">
+        Describe the task in plain language. <strong>cdx</strong> reads the repository,
+        edits the files and runs commands on the machine it runs on - and asks for
+        permission before every change.
+      </p>
+      <div class="actions">
+        <a class="btn primary" href="#install">Install</a>
+        <a class="btn" href="https://github.com/YouROK/cdx">GitHub</a>
+        <a class="btn" href="https://github.com/YouROK/cdx/releases">Releases</a>
+      </div>
+    </div>
+    <div class="term">
+      <div class="bar"><i></i><i></i><i></i></div>
+      <pre><span class="prompt">$</span> <span class="cmd">sudo apt install ./cdx_&lt;version&gt;_amd64.deb</span>
+<span class="prompt">$</span> <span class="cmd">cdx "why does the nightly backup take 3 hours?"</span>
+<span class="out">· reading backup.timer</span>
+<span class="out">· reading scripts/backup.sh</span>
+<span class="comment">The backup copies 240 GB one file at a time and</span>
+<span class="comment">never skips unchanged files: that is the 3 hours.</span>
+<span class="comment">Compression is 4 minutes of it.</span>
+<span class="out">Allow once: run `du -sh /srv/backup/*`?</span>
+<span class="out">[1] Allow  [2] Deny</span></pre>
+    </div>
+  </div>
+</div>
+
+<section id="use">
+  <div class="wrap">
+    <h2>What admins hand to it</h2>
+    <p class="sub">
+      It is not a chat window next to your terminal. It works in the current directory on
+      the real machine: reads files, runs commands, shows what it changed.
+    </p>
+    <div class="grid c2">
+      <div class="card">
+        <h3>Understand code you inherited</h3>
+        <p>"Explain what this service does and which ports it opens." cdx walks the
+          repository and answers with file and line references instead of guessing.</p>
+      </div>
+      <div class="card">
+        <h3>Fix classic scripts</h3>
+        <p>"This build script runs one job at a time - make it run five." You get a
+          diff, not a rewritten file: same flags, same output names, only the loops move.</p>
+      </div>
+      <div class="card">
+        <h3>Work with units and logs</h3>
+        <p>"Why did this container restart at 3 am?" It reads journald output, unit
+          files and configs, then names the cause and the fix.</p>
+      </div>
+      <div class="card">
+        <h3>Keep the routine boring</h3>
+        <p>"Write a systemd unit for this binary, set the limits, enable it." The
+          commands run only after you approve them.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="demo">
+  <div class="wrap">
+    <h2>A real session, start to finish</h2>
+    <p class="sub">
+      A real session, recorded at normal speed and played 2.5x faster: a 16-target build
+      script is rewritten to run five builds at a time.
+    </p>
+    <div class="video">
+      <video controls preload="none" poster="assets/demo-poster.png" width="1152" height="700">
+        <source src="assets/demo.webm" type="video/webm">
+        <source src="assets/demo.mp4" type="video/mp4">
+        <a href="assets/demo.mp4">Download the video</a>
+      </video>
+    </div>
+    <p class="caption">
+      Session time: 2 min 11 s, 15 steps. The model was the configured default; the
+      permission prompts were pre-approved for the recording.
+    </p>
+  </div>
+</section>
+
+<section id="example">
+  <div class="wrap">
+    <h2>A real example: build-all.sh</h2>
+    <p class="sub">
+      <code>build-all.sh</code> from a Go project builds sixteen platforms one after
+      another, then the GStreamer variants, then the Android targets. On a laptop that is
+      a coffee break; on a build host it is wasted cores.
+    </p>
+
+    <div class="code-head"><span><span class="dot"></span>before - one build at a time</span></div>
+<pre class="code">for PLATFORM in "${PLATFORMS[@]}"; do
+  GOOS=${PLATFORM%/*}
+  GOARCH=${PLATFORM#*/}
+  CMD="GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=0 ${GOBIN} build ${BUILD_FLAGS} -o ${BIN_FILENAME} ./cmd"
+  echo "${CMD}"
+  eval "$CMD" || FAILURES="${FAILURES} ${GOOS}/${GOARCH}${GOARM}"
+done</pre>
+
+    <p class="sub" style="margin-top:28px">The prompt:</p>
+<pre class="code wrap-code"><span class="prompt">$</span> <span class="cmd">cdx "The builds in build-all.sh run one after another. Make it run up to 5 builds in parallel and keep the same flags and output names."</span></pre>
+
+    <div class="code-head" style="margin-top:28px"><span><span class="dot"></span>after - a bounded job pool, failures still reported the same way</span></div>
+<pre class="code">MAX_JOBS=${MAX_JOBS:-5}
+spawn_build() {
+  local cmd="$1" label="$2" running id
+  while :; do
+    running=$(jobs -rp | wc -l)
+    (( running &lt; MAX_JOBS )) &amp;&amp; break
+    wait -n
+  done
+  ...
+  ( if ! eval "${cmd}"; then : &gt; "${JOBS_TMP}/${id}.failed"; fi ) &amp;
+}
+
+for PLATFORM in "${PLATFORMS[@]}"; do
+  ...
+  <span class="add">spawn_build "${CMD}" "${GOOS}/${GOARCH}${GOARM}"</span>
+done
+<span class="add">wait_builds</span></pre>
+
+    <p class="sub" style="margin-top:24px">
+      What stayed the same matters more than what changed: the build flags, the
+      <code>-o</code> paths, the <code>.exe</code> suffix, the GOARM/GOMIPS handling, and
+      the final <code>failed on: ...</code> block with exit code 1. The web build,
+      <code>go mod tidy</code>, AppImages and the docker step are left sequential on
+      purpose - they share one directory and would overwrite each other.
+    </p>
+    <p class="sub">
+      <a href="https://github.com/YouROK/TorrServer/blob/master/build-all.sh">The original script</a>
+      was not touched: cdx worked on a copy in a scratch directory.
+    </p>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>How it is built</h2>
+    <p class="sub">
+      One binary for the CLI and one daemon in the background. Every feature is a plugin,
+      so the core stays small: transport, storage, the plugin runtime, the session loop.
+    </p>
+    <div class="split">
+      <div>
+        <table class="kv">
+          <tr><th>CLI</th><td><code>cdx "prompt"</code>, sessions per directory, queueing when two prompts land in the same folder</td></tr>
+          <tr><th>Daemon</th><td>keeps sessions, providers and permissions; talks over a unix socket, serves the dashboard on <code>127.0.0.1:8787</code></td></tr>
+          <tr><th>Providers</th><td>any OpenAI-compatible endpoint (OpenAI, DeepSeek, OpenRouter, Ollama, LM Studio) and Anthropic</td></tr>
+          <tr><th>Tools</th><td>read, search, edit, shell, subagents, MCP servers as extra tools</td></tr>
+          <tr><th>Data</th><td><code>~/.local/share/cdx</code>, <code>~/.config/cdx</code>, <code>~/.local/state/cdx</code></td></tr>
+        </table>
+      </div>
+      <div>
+<pre class="code"><span class="comment"># the daemon starts on demand</span>
+<span class="prompt">$</span> <span class="cmd">cdx daemon status</span>
+<span class="out">Daemon status: running</span>
+
+<span class="prompt">$</span> <span class="cmd">cdx plugins list</span>
+<span class="out">auth, providers, permissions, tools-local,</span>
+<span class="out">subagent, mcp, mcp-server, webui, ...</span>
+
+<span class="prompt">$</span> <span class="cmd">cdx models</span>
+<span class="out">* openai/gpt-5      (plugin: providers)</span>
+<span class="out">  ollama/qwen3:8b    (plugin: providers)</span>
+
+<span class="prompt">$</span> <span class="cmd">cdx session list</span>
+<span class="out">01K9...  refactor backup.sh  /etc/backup</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <h2>It asks before it acts</h2>
+    <p class="sub">
+      Every edit, every shell command and every path outside the working folder goes
+      through a permission check. The default answer for an unapproved action is "no".
+    </p>
+    <div class="shot" style="margin-bottom:18px">
+      <img src="assets/permission.png" alt="A cdx permission prompt: the command, the working folder and the outside paths" loading="lazy">
+    </div>
+    <p class="caption" style="margin-bottom:28px">
+      The prompt shows the command, the working folder and every outside path before you
+      answer. Enter takes the default, which is "allow once".
+    </p>
+    <div class="grid c2">
+      <div class="card">
+        <h3>Per class of action</h3>
+        <p>Read, edit and dangerous tools each have <code>allow</code>,
+          <code>ask</code> or <code>deny</code>; a separate option decides what happens
+          outside the working folder.</p>
+      </div>
+      <div class="card">
+        <h3>Danger rules</h3>
+        <p>Patterns such as <code>rm -rf</code>, <code>git push --force</code> and
+          <code>mkfs</code> are marked critical and never pass as routine commands.</p>
+      </div>
+      <div class="card">
+        <h3>Full action, not a summary</h3>
+        <p>There is no "the agent wants to do something". You see the exact command,
+          file or folder that is about to change.</p>
+      </div>
+      <div class="card">
+        <h3>Local by default</h3>
+        <p>The dashboard listens on <code>127.0.0.1</code> and needs a token; remote
+          access is an explicit opt-in with a warning. Prompts go only to the provider
+          you configure.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Install</h2>
+    <p class="sub">
+      Packages for i386, x86_64, armv7 and aarch64 are built for every release. Pick the
+      one your distribution understands.
+    </p>
+
+    <details class="install" open>
+      <summary>Debian / Ubuntu (.deb)</summary>
+      <div class="body">
+        <p>Downloads <code>cdx_&lt;version&gt;_amd64.deb</code> from the releases page.</p>
+<pre class="code">sudo apt install ./cdx_&lt;version&gt;_amd64.deb</pre>
+      </div>
+    </details>
+
+    <details class="install">
+      <summary>Fedora / RHEL / openSUSE (.rpm)</summary>
+      <div class="body">
+<pre class="code">sudo dnf install ./cdx-&lt;version&gt;-1.x86_64.rpm</pre>
+      </div>
+    </details>
+
+    <details class="install">
+      <summary>Alpine (.apk)</summary>
+      <div class="body">
+        <p>The package is unsigned, hence the flag.</p>
+<pre class="code">sudo apk add --allow-untrusted ./cdx_&lt;version&gt;_x86_64.apk</pre>
+      </div>
+    </details>
+
+    <details class="install">
+      <summary>Any Linux (zip + install.sh)</summary>
+      <div class="body">
+<pre class="code">unzip cdx_&lt;version&gt;_linux_x86_64.zip -d cdx
+sudo ./cdx/install.sh          <span class="comment"># /usr/bin/cdx and /usr/share/cdx/plugins</span></pre>
+      </div>
+    </details>
+
+    <details class="install">
+      <summary>From source</summary>
+      <div class="body">
+        <p>Go 1.27+ and Node.js 22+ are needed to build the binary and the panels.</p>
+<pre class="code">make                 <span class="comment"># web interface, plugin panels, binary</span>
+sudo make install    <span class="comment"># /usr/bin/cdx and /usr/share/cdx/plugins</span></pre>
+      </div>
+    </details>
+
+    <div class="grid c3" style="margin-top:28px">
+      <div class="card">
+        <h3>First run</h3>
+        <p>Start the daemon, open the dashboard, add a provider and a model.</p>
+<pre class="code" style="margin-top:12px">cdx daemon run --http 127.0.0.1:8787</pre>
+      </div>
+      <div class="card">
+        <h3>Settings page</h3>
+        <p>Starts the daemon if needed and opens the dashboard in the browser.</p>
+<pre class="code" style="margin-top:12px">cdx --config</pre>
+      </div>
+      <div class="card">
+        <h3>One-shot request</h3>
+        <p>Runs in the current directory, keeps the session for the next prompt.</p>
+<pre class="code" style="margin-top:12px">cdx "explain this package"</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <h2>Documentation</h2>
+    <div class="grid c2">
+      <div class="card">
+        <h3><a href="https://github.com/YouROK/cdx#readme">README</a></h3>
+        <p>Install, use, web interface, remote access, permission prompts.</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/YouROK/cdx/blob/main/ARCHITECTURE.md">Architecture</a></h3>
+        <p>Core modules, contracts between the core and the plugins.</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/YouROK/cdx/blob/main/PLUGINS.md">Plugin guide</a></h3>
+        <p>Manifest format, the <code>cdx</code> host API, panels, permissions.</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/YouROK/cdx/blob/main/MCP-SERVER.md">MCP server</a></h3>
+        <p>Expose cdx as tools to another agent, with approvals and per-client permissions.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div>cdx - <a href="https://github.com/YouROK/cdx/blob/main/LICENSE">GPL-3.0</a></div>
+    <div>
+      <a href="https://github.com/YouROK/cdx">GitHub</a> ·
+      <a href="https://github.com/YouROK/cdx/releases">Releases</a> ·
+      <a href="ru/">Русский</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
